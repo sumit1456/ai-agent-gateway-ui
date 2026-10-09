@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Black hole (WebGL)</title>
+<style>
+:root{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#040409}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:0}
+h1{position:absolute;z-index:1;left:0;right:0;bottom:8%;margin:0;text-align:center;color:#eee;font:600 clamp(28px,5vw,56px)/1.1 system-ui,sans-serif}
+#err{position:absolute;z-index:2;color:#eee;font:14px system-ui;padding:16px}
+</style></head><body>
+<canvas id="c"></canvas><h1>Your headline sits here</h1><div id="err"></div>
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 R;uniform float T;
+const float TAU=6.2831853;
+const float RIN=2.6,ROUT=9.0;     // disk radii (hole radius = 1)
+const float ROT=1.0;              // set -1.0 to flip the bright side
+float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float vnp(vec2 p,float per){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+ float a=mod(i.x,per),b=mod(i.x+1.,per);
+ return mix(mix(h21(vec2(a,i.y)),h21(vec2(b,i.y)),f.x),mix(h21(vec2(a,i.y+1.)),h21(vec2(b,i.y+1.)),f.x),f.y);}
+vec3 ramp(float k){ // 0 = cool deep red, 1 = white-hot
+ vec3 c=mix(vec3(.45,.05,0.),vec3(1.,.42,.04),smoothstep(0.,.5,k));
+ c=mix(c,vec3(1.,.82,.45),smoothstep(.45,.85,k));
+ return mix(c,vec3(1.,.97,.9),smoothstep(.85,1.,k));}
+void main(){
+ vec2 uv=(gl_FragCoord.xy-R*vec2(.5,.68))/min(R.x*.6,R.y);
+ float el=.3;
+ vec3 ro=30.*vec3(0.,sin(el),-cos(el));
+ vec3 fw=-normalize(ro),rt=normalize(cross(vec3(0,1,0),fw)),up=cross(fw,rt);
+ vec3 vel=normalize(fw+(uv.x*rt+uv.y*up)*1.0),pos=ro;
+ float h2=dot(cross(pos,vel),cross(pos,vel));vec3 v0=vel;
+ vec3 col=vec3(0.);float tr=1.,nc=0.;bool esc=true;
+ for(int i=0;i<170;i++){
+  float r2=dot(pos,pos),r=sqrt(r2);
+  if(r<1.){esc=false;break;}
+  if(tr<.02)break;
+  if(r>45.&&dot(pos,vel)>0.)break;
+  float dt=clamp(.05*r,.015,.45);
+  vec3 nv=normalize(vel-1.5*h2*pos/(r2*r2*r)*dt);
+  vec3 np=pos+nv*dt;
+  if(pos.y*np.y<0.){
+   vec3 p=mix(pos,np,pos.y/(pos.y-np.y));
+   float rr=length(p.xz);
+   if(rr>RIN&&rr<ROUT){
+    float k=pow(RIN/rr,.55);
+    float u=(atan(p.z,p.x)/TAU+.5)*24.+T*2.5/pow(rr,1.5)*ROT*3.8;
+    float n=.6*vnp(vec2(u,rr*6.),24.)+.4*vnp(vec2(u*2.,rr*15.),48.);
+    vec3 vd=normalize(vec3(-p.z,0.,p.x))*sqrt(.5/rr)*ROT;
+    float D=clamp(1./(1.-dot(vd,-nv)),.35,2.6);
+    float bf=smoothstep(.15,.6,1.-dot(nv,v0)); // strongly bent rays = lensed arch: keep it thin
+    float I=pow(RIN/rr,1.3+3.5*bf)*(.45+.9*n)*pow(D,2.2);
+    float ed=smoothstep(RIN,RIN+.25,rr)*(1.-smoothstep(ROUT-3.,ROUT,rr));
+    I*=ed*(1.-.6*nc);
+    col+=tr*ramp(clamp(k*D*1.05,0.,1.))*I*2.2;
+    tr*=1.-.97*ed;nc=1.;
+   }
+  }
+  pos=np;vel=nv;
+ }
+ if(esc){ // lensed starfield
+  vec3 d=floor(normalize(vel)*420.);
+  float s=h21(d.xy+d.z*7.3);
+  col+=tr*vec3(.8,.85,1.)*smoothstep(.9985,1.,s)*.9;
+ }
+ col=1.-exp(-col*1.5);
+ gl_FragColor=vec4(col+vec3(.016,.016,.036)*tr,1.);
+}
+</script>
+<script>
+const c=document.getElementById('c'),gl=c.getContext('webgl');
+function fail(m){document.getElementById('err').textContent=m}
+if(!gl)fail('WebGL not supported');else{
+ const mk=(t,s)=>{const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))fail(gl.getShaderInfoLog(o));return o};
+ const vs='attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}';
+ const p=gl.createProgram();
+ gl.attachShader(p,mk(gl.VERTEX_SHADER,vs));
+ gl.attachShader(p,mk(gl.FRAGMENT_SHADER,document.getElementById('fs').textContent));
+ gl.linkProgram(p);gl.useProgram(p);
+ gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());
+ gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+ const a=gl.getAttribLocation(p,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
+ const uR=gl.getUniformLocation(p,'R'),uT=gl.getUniformLocation(p,'T');
+ const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+ function size(){const d=Math.min(devicePixelRatio||1,1.25);c.width=Math.round(c.clientWidth*d);c.height=Math.round(c.clientHeight*d);gl.viewport(0,0,c.width,c.height)}
+ size();addEventListener('resize',size);
+ let t0=performance.now();
+ (function f(now){requestAnimationFrame(f);
+  gl.uniform2f(uR,c.width,c.height);gl.uniform1f(uT,(now-t0)/1000*(reduce?.1:1));
+  gl.drawArrays(gl.TRIANGLES,0,3);})(t0);
+}
+</script></body></html>

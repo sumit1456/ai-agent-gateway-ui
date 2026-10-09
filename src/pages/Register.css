@@ -1,0 +1,291 @@
+/* ============================================================
+   Register.css — styles for the Register page only
+   Shares base auth-* class names with Login.css but can be
+   customised completely independently.
+   ============================================================ */
+
+/* ---- Page shell ---- */
+.auth-page {
+  position: relative;
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 20px 60px;
+  overflow: hidden;
+}
+
+/* Register page needs a bit more vertical space */
+.reg-page {
+  align-items: flex-start;
+  padding-top: 90px;
+}
+
+/* ---- Card ---- */
+.auth-card {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  max-width: 480px;
+  background: rgba(12, 12, 22, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 24px;
+  padding: 44px 48px 40px;
+  backdrop-filter: blur(18px);
+  box-shadow:
+    0 0 0 1px rgba(255, 154, 60, 0.06),
+    0 40px 100px -30px rgba(0, 0, 0, 0.95),
+    0 0 80px -40px rgba(255, 140, 50, 0.12);
+}
+
+/* Register card is wider to fit the two-column rows */
+.reg-card {
+  max-width: 580px;
+}
+
+/* ---- Header ---- */
+.auth-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.auth-tag {
+  display: inline-block;
+  font: 500 11px 'JetBrains Mono', monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--a);
+  border: 1px solid rgba(255, 154, 60, 0.35);
+  padding: 5px 13px;
+  border-radius: 999px;
+  background: rgba(255, 154, 60, 0.07);
+  margin-bottom: 16px;
+}
+
+.auth-title {
+  font-size: clamp(22px, 4vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 8px;
+}
+
+.auth-sub {
+  color: var(--muted);
+  font-size: 15px;
+  margin: 0;
+}
+
+/* ---- Message banner ---- */
+.auth-message {
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  margin-bottom: 24px;
+  border: 1px solid transparent;
+}
+
+.auth-message.success {
+  background: rgba(46, 204, 113, 0.1);
+  border-color: rgba(46, 204, 113, 0.3);
+  color: #6efcb0;
+}
+
+.auth-message.error {
+  background: rgba(231, 76, 60, 0.1);
+  border-color: rgba(231, 76, 60, 0.3);
+  color: #f98b82;
+}
+
+/* ---- API key box ---- */
+.apikey-box {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 154, 60, 0.25);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 24px;
+}
+
+.apikey-label {
+  font: 500 11px 'JetBrains Mono', monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--a);
+  display: block;
+  margin-bottom: 10px;
+}
+
+.apikey-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.apikey-value {
+  flex: 1;
+  font: 13px 'JetBrains Mono', monospace;
+  color: #cfcde6;
+  overflow-x: auto;
+  word-break: break-all;
+  background: rgba(255,255,255,0.03);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+.copy-btn {
+  white-space: nowrap;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 154, 60, 0.4);
+  background: rgba(255, 154, 60, 0.1);
+  color: var(--a);
+  font: 500 13px inherit;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.copy-btn:hover {
+  background: rgba(255, 154, 60, 0.2);
+}
+
+.apikey-warning {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: rgba(255, 200, 100, 0.7);
+}
+
+/* ---- Form ---- */
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Two-column row for paired fields */
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.optional-badge {
+  font: 400 11px 'JetBrains Mono', monospace;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: rgba(255,255,255,0.05);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--fg);
+  font: inherit;
+  font-size: 15px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.field input::placeholder {
+  color: rgba(255, 255, 255, 0.22);
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--a);
+  box-shadow: 0 0 0 3px rgba(255, 154, 60, 0.18);
+}
+
+/* ---- Submit button ---- */
+.auth-submit {
+  margin-top: 6px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 15px;
+  border: 0;
+  background: linear-gradient(135deg, var(--a), #ff6a3c);
+  color: #1a0a00;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50px;
+}
+
+.auth-submit:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 0 44px rgba(255, 140, 50, 0.55);
+}
+
+.auth-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(26, 10, 0, 0.3);
+  border-top-color: #1a0a00;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- Footer switch link ---- */
+.auth-switch {
+  margin-top: 24px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.auth-switch a {
+  color: var(--a);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.auth-switch a:hover {
+  text-decoration: underline;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 600px) {
+  .reg-card {
+    padding: 30px 20px 26px;
+    border-radius: 18px;
+  }
+
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+}
