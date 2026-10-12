@@ -46,7 +46,7 @@ const ACTIVE_RENDER_QUALITY = RENDER_QUALITY[getRenderMode()];
 const MAX_PIXEL_RATIO = ACTIVE_RENDER_QUALITY.pixelRatio; // lower values shade fewer pixels
 
 // ---- Black hole size & position -----------------------------------------------
-const BLACK_HOLE_RADIUS = 0.15;              // ★ BLACK HOLE RADIUS / SIZE: this x min(0.8 x canvas width, canvas height).
+const BLACK_HOLE_RADIUS = 0.2;              // ★ BLACK HOLE RADIUS / SIZE: this x min(0.8 x canvas width, canvas height).
 //   Same rule as the canvas version (hr = Math.min(W * 0.8, H) * 0.02): 0.02 here = the same radius as 0.02 there.
 //   Rings, distortion halo and planet size scale with it. To make everything smaller you can also just shrink the canvas in CSS.
 const BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION = 0.8; // the 0.8 in the rule above

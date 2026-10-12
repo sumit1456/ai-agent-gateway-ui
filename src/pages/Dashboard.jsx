@@ -178,7 +178,7 @@ function WorkflowsTab() {
             <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
               <JsonObjectField label="Input mapping (JSON)" value={node.input_mapping} onChange={(input_mapping) => updateNode(index, { input_mapping })} rows={2} />
               <JsonObjectField label="Output keys and expected types (JSON)" value={node.output_schema} onChange={(output_schema) => updateNode(index, { output_schema })} rows={2} />
-              <label className="field-label">Tools this step may call (comma-separated)</label><input className="key-input" value={(node.tools || []).join(', ')} onChange={(e) => updateNode(index, { tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} placeholder="e.g. kb_search, get_conversation_history" />
+              <label className="field-label">Tools this step may call (comma-separated)</label><input className="key-input" value={(node.tools || []).join(', ')} onChange={(e) => updateNode(index, { tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} placeholder="e.g. semantic_search, get_conversation_history" />
               <span className="field-hint">Use $.request, $.variables, or $.steps.&lt;step-id&gt;.output.&lt;key&gt; to pass earlier results. Available tools: {availableTools.join(', ') || 'none configured'}.</span>
             </details>
           </section>)}
@@ -195,7 +195,7 @@ function WorkflowsTab() {
         <button type="submit" className="btn p" disabled={saving}>{saving ? 'Saving…' : 'Save new workflow version'}</button>
       </form>
     ) : <>
-      <p className="providers-intro">Pick a starter workflow or build your own. Fixed workflows continue through their configured steps in order. Choose Dynamic for general-purpose requests: its first agent selects a configured path, then the workflow continues through that path to completion. Presets are copied into your account so you can customize them.</p>
+      <p className="providers-intro">Pick a starter workflow or build your own. Fixed workflows continue through their configured steps in order. Choose Dynamic for general-purpose requests: its first agent selects a configured path, then the workflow continues through that path to completion. To answer from your own documents, attach a knowledge base to the agent and let an executor step use semantic_search. The standard planner/executor workflows include it as an optional tool; it is usable only when a knowledge base is attached. Presets are copied into your account so you can customize them.</p>
       <button className="btn p" onClick={startCustom} style={{ marginBottom: '1rem' }}>+ Create custom workflow</button>
       <h3>Starter workflows</h3>
       <div className="provider-grid">{presets.map((preset) => <article key={preset.id} className="provider-card">
@@ -1415,7 +1415,7 @@ function AgentsTab() {
                 </div>
                 
                 <div style={{ fontSize: '0.8rem', color: '#666', padding: '0.5rem', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                  💡 <strong>Tip:</strong> Built-in tools (get_conversation_history, store_kv, kb_search, etc.) are always available. 
+                  💡 <strong>Tip:</strong> Built-in tools include get_conversation_history and semantic_search (when a knowledge base is attached), plus store_kv and others.
                   Mention them in your custom prompts to guide the agent's behavior.
                 </div>
               </div>
