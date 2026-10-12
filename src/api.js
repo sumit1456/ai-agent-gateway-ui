@@ -112,8 +112,57 @@ export function createAgent(payload) {
   });
 }
 
+export function updateAgent(agent_id, payload) {
+  return request(`/v1/agents/${agent_id}`, {
+    method: 'PUT',
+    auth: true,
+    body: payload,
+  });
+}
+
 export function deleteAgent(agent_id) {
   return request(`/v1/agents/${agent_id}`, { method: 'DELETE', auth: true });
+}
+
+/* ---- Workflows ---- */
+export function listWorkflowPresets() {
+  return request('/v1/workflows/presets');
+}
+
+export function listWorkflows() {
+  return request('/v1/workflows/', { auth: true });
+}
+
+export function createWorkflow(payload) {
+  return request('/v1/workflows/', { method: 'POST', auth: true, body: payload });
+}
+
+export function createWorkflowFromPreset(presetId) {
+  return request(`/v1/workflows/from-preset/${encodeURIComponent(presetId)}`, { method: 'POST', auth: true });
+}
+
+export function updateWorkflow(workflowId, payload) {
+  return request(`/v1/workflows/${workflowId}`, { method: 'PUT', auth: true, body: payload });
+}
+
+export function deleteWorkflow(workflowId) {
+  return request(`/v1/workflows/${workflowId}`, { method: 'DELETE', auth: true });
+}
+
+export function listRuns(limit = 50) {
+  return request(`/v1/runs?limit=${limit}`, { auth: true });
+}
+
+export function getRun(runId) {
+  return request(`/v1/runs/${runId}`, { auth: true });
+}
+
+export function listCustomTools() {
+  return request('/v1/tools/', { auth: true });
+}
+
+export function listBuiltinTools() {
+  return request('/v1/builtin-tools');
 }
 
 /* ---- Knowledge Bases ---- */
@@ -125,6 +174,14 @@ export function listKnowledgeBases() {
 export function createKnowledgeBase(payload) {
   return request('/v1/knowledge-bases/', {
     method: 'POST',
+    auth: true,
+    body: payload,
+  });
+}
+
+export function updateKnowledgeBase(kb_id, payload) {
+  return request(`/v1/knowledge-bases/${kb_id}`, {
+    method: 'PUT',
     auth: true,
     body: payload,
   });

@@ -28,10 +28,25 @@ import React, { useEffect, useRef } from 'react';
    ========================================================================== */
 
 // ---- Render quality ------------------------------------------------------------
-const MAX_PIXEL_RATIO = 1.25;                  // render sharpness cap (lower = faster)
+// Set to 'high', 'medium', 'low', or 'auto'. Auto uses device hints at startup.
+const RENDER_MODE = 'low';
+const RENDER_QUALITY = {
+  high: { pixelRatio: 1.25, rayMarchSteps: 170 },
+  medium: { pixelRatio: 1.0, rayMarchSteps: 150 },
+  low: { pixelRatio: 0.75, rayMarchSteps: 140 },
+};
+const getRenderMode = () => {
+  if (RENDER_MODE !== 'auto') return RENDER_QUALITY[RENDER_MODE] ? RENDER_MODE : 'high';
+  if (typeof navigator === 'undefined') return 'high';
+  const cores = navigator.hardwareConcurrency || 4;
+  const memory = navigator.deviceMemory || 4;
+  return cores <= 4 || memory <= 4 ? 'low' : cores <= 8 || memory <= 8 ? 'medium' : 'high';
+};
+const ACTIVE_RENDER_QUALITY = RENDER_QUALITY[getRenderMode()];
+const MAX_PIXEL_RATIO = ACTIVE_RENDER_QUALITY.pixelRatio; // lower values shade fewer pixels
 
 // ---- Black hole size & position -----------------------------------------------
-const BLACK_HOLE_RADIUS = 0.4;               // ★ BLACK HOLE RADIUS / SIZE (the one knob): black hole radius = this x min(0.8 x canvas width, canvas height).
+const BLACK_HOLE_RADIUS = 0.15;              // ★ BLACK HOLE RADIUS / SIZE: this x min(0.8 x canvas width, canvas height).
 //   Same rule as the canvas version (hr = Math.min(W * 0.8, H) * 0.02): 0.02 here = the same radius as 0.02 there.
 //   Rings, distortion halo and planet size scale with it. To make everything smaller you can also just shrink the canvas in CSS.
 const BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION = 0.8; // the 0.8 in the rule above
@@ -68,7 +83,7 @@ const RING_CLUMP_CONTRAST = 1.2;               // how strongly clumps stand out 
 // ---- Ring brightness & quality ---------------------------------------------------
 const DISK_BRIGHTNESS = 1.7;                   // overall ring glow
 const DISK_EXPOSURE = 1.5;                     // higher = hotter / more washed out
-const RAY_MARCH_STEPS = 170;                   // lower = faster, may clip the lensing
+const RAY_MARCH_STEPS = ACTIVE_RENDER_QUALITY.rayMarchSteps; // keep >= 140 to preserve the lensing silhouette
 
 // ring colour ramp, cool -> white-hot  [r, g, b] 0..1
 const DISK_COLOR_COOL = [0.45, 0.05, 0.0];

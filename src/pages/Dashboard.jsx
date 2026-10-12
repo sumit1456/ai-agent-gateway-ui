@@ -2,21 +2,254 @@ import { useEffect, useState } from 'react';
 import {
   addProvider,
   deleteProvider,
-  fetchProviderModels,
   getToken,
   listConfiguredProviders,
   listProviderCatalog,
   updateProvider,
   listAgents,
   createAgent,
+  updateAgent,
   deleteAgent,
+  listWorkflowPresets,
+  listWorkflows,
+  createWorkflow,
+  createWorkflowFromPreset,
+  updateWorkflow,
+  deleteWorkflow,
+  listRuns,
+  getRun,
+  listCustomTools,
+  listBuiltinTools,
   listKnowledgeBases,
   createKnowledgeBase,
+  updateKnowledgeBase,
   deleteKnowledgeBase,
   createApiKey,
   listApiKeys,
 } from '../api';
+import { useProviderModels } from '../hooks/useProviderModels';
 import './Dashboard.css';
+
+const AGENT_PROMPT_ROLES = [
+  ['router', 'Router', 'Classifies a request and can choose among routing options when a workflow includes a router step.'],
+  ['direct', 'Direct responder', 'Handles a request in one focused response when the workflow routes work to this role.'],
+  ['planner', 'Planner', 'Turns the information provided to this step into a plan; it does not perform the planned work.'],
+  ['executor', 'Executor', 'Carries out the task assigned to this step using only its mapped inputs and enabled tools.'],
+  ['controller', 'Workflow controller', 'Chooses among the outgoing workflow connections configured for this controller step.'],
+  ['reviewer', 'Reviewer', 'Checks work against the criteria and evidence supplied to this step. It runs only when the workflow reaches it.'],
+  ['finalizer', 'Final answer writer', 'Presents the completed workflow result in the requested format.'],
+];
+
+const WORKFLOW_ROLES = ['planner', 'executor', 'reviewer', 'finalizer', 'direct', 'router', 'controller'];
+
+function JsonObjectField({ label, value, onChange, rows = 3 }) {
+  const [draft, setDraft] = useState(JSON.stringify(value || {}, null, 2));
+  const [error, setError] = useState('');
+  useEffect(() => { setDraft(JSON.stringify(value || {}, null, 2)); }, [value]);
+  return <div>
+    <label className="field-label">{label}</label>
+    <textarea className="key-input" rows={rows} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={() => {
+      try { const parsed = JSON.parse(draft); if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Enter a JSON object.'); onChange(parsed); setError(''); }
+      catch { setError('Enter valid JSON object syntax before saving.'); }
+    }} />
+    {error && <span className="field-hint" style={{ color: '#b42318' }}>{error}</span>}
+  </div>;
+}
+
+function workflowNode(id, name, role) {
+  return {
+    id, name, role, type: 'agent', instructions: `Describe what the ${name.toLowerCase()} step should do.`,
+    input_mapping: { request: '$.request' }, output_schema: { response: 'string' }, tools: [], max_attempts: 1,
+  };
+}
+
+function WorkflowsTab() {
+  const [presets, setPresets] = useState([]);
+  const [workflows, setWorkflows] = useState([]);
+  const [availableTools, setAvailableTools] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [advanced, setAdvanced] = useState(false);
+  const [jsonDraft, setJsonDraft] = useState('');
+  const [notice, setNotice] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const [presetRows, workflowRows, customTools, builtinTools] = await Promise.all([listWorkflowPresets(), listWorkflows(), listCustomTools(), listBuiltinTools()]);
+      setPresets(presetRows);
+      setWorkflows(workflowRows);
+      setAvailableTools([...builtinTools.builtin_tools.map((tool) => tool.name), ...customTools.map((tool) => tool.name)]);
+    } catch (err) {
+      setNotice({ message: err.message, kind: 'error' });
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  function startCustom() {
+    const definition = {
+      schema_version: 1, start_node: 'step_1',
+      nodes: [workflowNode('step_1', 'Step 1', 'executor')], edges: [],
+      limits: { max_steps: 20, max_retries_per_step: 1 },
+    };
+    setEditing({ name: 'My workflow', description: '', definition });
+    setJsonDraft(JSON.stringify(definition, null, 2));
+    setAdvanced(false);
+  }
+  async function choosePreset(preset) {
+    try {
+      const workflow = await createWorkflowFromPreset(preset.id);
+      await load();
+      setEditing(workflow);
+      setJsonDraft(JSON.stringify(workflow.definition, null, 2));
+    } catch (err) { setNotice({ message: err.message, kind: 'error' }); }
+  }
+  function updateNode(index, patch) {
+    const definition = { ...editing.definition, nodes: [...editing.definition.nodes] };
+    definition.nodes[index] = { ...definition.nodes[index], ...patch };
+    setEditing({ ...editing, definition });
+    setJsonDraft(JSON.stringify(definition, null, 2));
+  }
+  function addStep() {
+    const nodes = [...editing.definition.nodes];
+    const id = `step_${Date.now()}`;
+    const newNode = workflowNode(id, `Step ${nodes.length + 1}`, 'executor');
+    const edges = [...editing.definition.edges];
+    const terminal = nodes.find((node) => !edges.some((edge) => edge.from === node.id));
+    if (terminal) edges.push({ from: terminal.id, to: id });
+    const definition = { ...editing.definition, nodes: [...nodes, newNode], edges };
+    setEditing({ ...editing, definition });
+    setJsonDraft(JSON.stringify(definition, null, 2));
+  }
+  function removeFinalStep() {
+    if (editing.definition.nodes.length <= 1) return;
+    const terminal = [...editing.definition.nodes].reverse().find((node) => !editing.definition.edges.some((edge) => edge.from === node.id));
+    if (!terminal || terminal.id === editing.definition.start_node) return;
+    const definition = {
+      ...editing.definition,
+      nodes: editing.definition.nodes.filter((node) => node.id !== terminal.id),
+      edges: editing.definition.edges.filter((edge) => edge.from !== terminal.id && edge.to !== terminal.id),
+    };
+    setEditing({ ...editing, definition });
+    setJsonDraft(JSON.stringify(definition, null, 2));
+  }
+  async function saveWorkflow(event) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      let definition = editing.definition;
+      if (advanced) definition = JSON.parse(jsonDraft);
+      const payload = { name: editing.name, description: editing.description, definition };
+      const saved = editing.version_id
+        ? await updateWorkflow(editing.id, payload)
+        : await createWorkflow(payload);
+      setEditing(saved);
+      setJsonDraft(JSON.stringify(saved.definition, null, 2));
+      await load();
+      setNotice({ message: 'Workflow saved as a new version.', kind: 'success' });
+    } catch (err) { setNotice({ message: err.message, kind: 'error' }); }
+    finally { setSaving(false); }
+  }
+
+  if (loading) return <div className="providers-status">Loading workflows…</div>;
+  return <>
+    {notice && <div className={`tab-notice ${notice.kind}`}>{notice.message}</div>}
+    {editing ? (
+      <form onSubmit={saveWorkflow}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div><h3 style={{ margin: 0 }}>Workflow editor</h3><p className="field-hint">The workflow controls which steps run and what runs next. Each step prompt controls only that step.</p><p className="field-hint">Planner steps always receive up to six recent conversation messages (three exchanges). Dynamic controllers and direct responders receive this context too. Planners see descriptions of workflow-assigned tools; each step can call only its own assigned tools.</p></div>
+          <button type="button" className="btn g" onClick={() => setEditing(null)}>Close</button>
+        </div>
+        <label className="field-label">Workflow name</label>
+        <input className="key-input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
+        <label className="field-label" style={{ marginTop: '0.75rem' }}>Description</label>
+        <input className="key-input" value={editing.description || ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
+        <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
+          {editing.definition.nodes.map((node, index) => <section key={node.id} style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '1rem' }}>
+            <strong>{index + 1}. {node.name || node.id}</strong>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.75rem' }}>
+              <div><label className="field-label">Step name</label><input className="key-input" value={node.name || ''} onChange={(e) => updateNode(index, { name: e.target.value })} /></div>
+              <div><label className="field-label">Role behavior</label><select className="default-select" value={node.role} onChange={(e) => updateNode(index, { role: e.target.value })}>{WORKFLOW_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></div>
+            </div>
+            <label className="field-label" style={{ marginTop: '0.75rem' }}>Instructions for this step</label>
+            <textarea className="key-input" rows={3} value={node.instructions || ''} onChange={(e) => updateNode(index, { instructions: e.target.value })} />
+            <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts</label><input className="key-input" type="number" min="1" max="3" value={node.max_attempts || 1} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
+            <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
+              <JsonObjectField label="Input mapping (JSON)" value={node.input_mapping} onChange={(input_mapping) => updateNode(index, { input_mapping })} rows={2} />
+              <JsonObjectField label="Output keys and expected types (JSON)" value={node.output_schema} onChange={(output_schema) => updateNode(index, { output_schema })} rows={2} />
+              <label className="field-label">Tools this step may call (comma-separated)</label><input className="key-input" value={(node.tools || []).join(', ')} onChange={(e) => updateNode(index, { tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} placeholder="e.g. kb_search, get_conversation_history" />
+              <span className="field-hint">Use $.request, $.variables, or $.steps.&lt;step-id&gt;.output.&lt;key&gt; to pass earlier results. Available tools: {availableTools.join(', ') || 'none configured'}.</span>
+            </details>
+          </section>)}
+        </div>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          <button type="button" className="btn g" onClick={addStep}>+ Add step</button>
+          <button type="button" className="btn g" onClick={removeFinalStep} disabled={editing.definition.nodes.length <= 1}>Remove final step</button>
+          <button type="button" className="btn g" onClick={() => setAdvanced(!advanced)}>{advanced ? 'Hide JSON editor' : 'Edit workflow JSON'}</button>
+        </div>
+        {advanced && <div style={{ marginBottom: '1rem' }}><label className="field-label">Workflow definition</label><textarea className="key-input" rows={18} value={jsonDraft} onChange={(e) => setJsonDraft(e.target.value)} /></div>}
+        <div style={{ padding: '0.75rem', background: 'var(--surface-muted, #f7f7f8)', borderRadius: 6, fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Steps run along the connections in this workflow. For branching, edit the JSON to add edges with a `when` condition that matches a structured output key, such as {`{"passed": true}`}. The runtime only permits configured transitions and enforces step and retry limits.
+        </div>
+        <button type="submit" className="btn p" disabled={saving}>{saving ? 'Saving…' : 'Save new workflow version'}</button>
+      </form>
+    ) : <>
+      <p className="providers-intro">Pick a starter workflow or build your own. Fixed workflows continue through their configured steps in order. Choose Dynamic for general-purpose requests: its first agent selects a configured path, then the workflow continues through that path to completion. Presets are copied into your account so you can customize them.</p>
+      <button className="btn p" onClick={startCustom} style={{ marginBottom: '1rem' }}>+ Create custom workflow</button>
+      <h3>Starter workflows</h3>
+      <div className="provider-grid">{presets.map((preset) => <article key={preset.id} className="provider-card">
+        <h4>{preset.name}</h4><p>{preset.description}</p><button className="btn g small" onClick={() => choosePreset(preset)}>Use this workflow</button>
+      </article>)}</div>
+      <h3 style={{ marginTop: '2rem' }}>Your workflows</h3>
+      {!workflows.length ? <p>No saved workflows yet.</p> : <div className="provider-grid">{workflows.map((workflow) => <article key={workflow.id} className="provider-card">
+        <h4>{workflow.name}</h4><p>{workflow.description}</p><small>Version {workflow.version} · {workflow.definition.nodes.length} steps</small>
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}><button className="btn g small" onClick={() => { setEditing(workflow); setJsonDraft(JSON.stringify(workflow.definition, null, 2)); }}>Edit</button><button className="btn g small" onClick={async () => { if (window.confirm('Delete this workflow? Agents using it must be reassigned.')) { try { await deleteWorkflow(workflow.id); await load(); } catch (err) { setNotice({ message: err.message, kind: 'error' }); } } }}>Delete</button></div>
+      </article>)}</div>}
+    </>}
+  </>;
+}
+
+function RunsTab() {
+  const [runs, setRuns] = useState([]);
+  const [selectedRun, setSelectedRun] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    listRuns().then((data) => setRuns(data.runs || [])).catch((err) => setError(err.message)).finally(() => setLoading(false));
+  }, []);
+  async function openRun(runId) {
+    try { setSelectedRun(await getRun(runId)); setError(''); }
+    catch (err) { setError(err.message); }
+  }
+  if (loading) return <div className="providers-status">Loading runs…</div>;
+  return <>
+    <p className="providers-intro">Inspect how a workflow ran, including step inputs and outputs, failures, and timing.</p>
+    {error && <div className="tab-notice error">{error}</div>}
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)', gap: '1rem' }}>
+      <div style={{ display: 'grid', alignContent: 'start', gap: '0.5rem' }}>
+        {!runs.length && <p>No runs found.</p>}
+        {runs.map((run) => <button key={run.id} className="btn g" onClick={() => openRun(run.id)} style={{ textAlign: 'left' }}>
+          <strong>{run.status}</strong><br /><small>{new Date(run.created_at).toLocaleString()} · {run.id.slice(0, 8)}</small>
+        </button>)}
+      </div>
+      {selectedRun ? <section style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '1rem', minWidth: 0 }}>
+        <h3 style={{ marginTop: 0 }}>Run details</h3>
+        <p><strong>Status:</strong> {selectedRun.status} · <strong>Tokens:</strong> {selectedRun.tokens_used} · <strong>Duration:</strong> {selectedRun.duration_ms} ms</p>
+        <p><strong>Request</strong></p><pre style={{ whiteSpace: 'pre-wrap' }}>{selectedRun.input}</pre>
+        <h4>Executed workflow steps</h4>
+        {(selectedRun.workflow_transitions || []).length > 0 && <ol>{selectedRun.workflow_transitions.map((transition, index) => <li key={`${transition.from}-${index}`}>{transition.from} → {transition.to}{transition.condition ? ` when ${JSON.stringify(transition.condition)}` : ''}</li>)}</ol>}
+        {(selectedRun.workflow_steps || []).map((step) => <details key={step.id} open style={{ borderTop: '1px solid var(--border, #ddd)', padding: '0.75rem 0' }}>
+          <summary style={{ cursor: 'pointer' }}><strong>{step.node_id}</strong> · attempt {step.attempt} · {step.status}</summary>
+          {step.error && <p style={{ color: '#b42318' }}>{step.error}</p>}
+          <strong>Input</strong><pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{JSON.stringify(step.input, null, 2)}</pre>
+          <strong>Output</strong><pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{JSON.stringify(step.output, null, 2)}</pre>
+        </details>)}
+        <h4>Final result</h4><pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{JSON.stringify(selectedRun.result, null, 2)}</pre>
+      </section> : <div className="empty-state"><h3>Select a run</h3><p>Choose a run to inspect the path it took.</p></div>}
+    </div>
+  </>;
+}
 
 const PROVIDER_COLORS = {
   nvidia: '#76b900',
@@ -195,9 +428,6 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
   const [keyError, setKeyError] = useState(null);
   const [keyStored, setKeyStored] = useState(isConfigured);
 
-  const [models, setModels] = useState(null); // null = not loaded yet
-  const [modelsError, setModelsError] = useState(null);
-  const [modelsLoading, setModelsLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [manualId, setManualId] = useState('');
 
@@ -210,24 +440,12 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
-  async function loadModels() {
-    setModelsLoading(true);
-    setModelsError(null);
-    try {
-      const data = await fetchProviderModels(provider.provider_id);
-      setModels(data.models || []);
-    } catch (err) {
-      setModelsError(err.message);
-      setModels([]);
-    } finally {
-      setModelsLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (step === 'models' && models === null && isConfigured) loadModels();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  const modelsQuery = useProviderModels(provider.provider_id, {
+    enabled: step === 'models' && keyStored,
+  });
+  const models = modelsQuery.data ?? null;
+  const modelsError = modelsQuery.error;
+  const modelsLoading = modelsQuery.isLoading || modelsQuery.isFetching;
 
   async function verifyAndContinue(e) {
     e.preventDefault();
@@ -242,7 +460,6 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
       onKeySaved(row);
       setStep('models');
       setApiKey('');
-      loadModels();
     } catch (err) {
       setKeyError(err.message);
     } finally {
@@ -403,7 +620,7 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
               <button
                 type="button"
                 className="btn g small"
-                onClick={loadModels}
+                onClick={() => modelsQuery.refetch()}
                 disabled={modelsLoading}
               >
                 {modelsLoading ? 'Loading…' : 'Refresh list'}
@@ -412,7 +629,7 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
 
             {modelsError && (
               <div className="modal-error">
-                Couldn’t fetch the model list ({modelsError}). You can still add model IDs
+                Couldn’t fetch the model list ({modelsError.message}). You can still add model IDs
                 manually below.
               </div>
             )}
@@ -528,15 +745,13 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
 
 function AgentsTab() {
   const [agents, setAgents] = useState([]);
+  const [workflows, setWorkflows] = useState([]);
   const [providers, setProviders] = useState([]);
   const [knowledgeBases, setKnowledgeBases] = useState([]);
   const [status, setStatus] = useState('loading');
   const [isCreating, setIsCreating] = useState(false);
+  const [editingAgent, setEditingAgent] = useState(null);
   const [notice, setNotice] = useState(null);
-
-  const [providerModels, setProviderModels] = useState([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState(null);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -544,6 +759,7 @@ function AgentsTab() {
     planner: '',
     executor: '',
     reviewer: '',
+    workflow_version_id: '',
     knowledge_base_ids: [],
     system_prompt: 'You are a helpful assistant.',
     // Custom prompts (optional)
@@ -553,10 +769,38 @@ function AgentsTab() {
     reviewer_prompt: '',
     direct_prompt: '',
     finalizer_prompt: '',
+    controller_prompt: '',
+    role_prompt_presets: {},
+    role_instructions: {},
   });
+  const selectedProvider = providers.find((p) => p.id === formData.provider_id);
+  const providerModelsQuery = useProviderModels(selectedProvider?.provider_id, {
+    enabled: isCreating && Boolean(selectedProvider),
+  });
+  const providerModels = Array.from(new Set([
+    ...(selectedProvider?.enabled_models || []),
+    ...(providerModelsQuery.data || []),
+    formData.planner,
+    formData.executor,
+    formData.reviewer,
+  ].filter(Boolean)));
+  const modelsLoading = providerModelsQuery.isLoading || providerModelsQuery.isFetching;
+  const modelsError = providerModelsQuery.error?.message;
   
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [defaultPrompts, setDefaultPrompts] = useState(null);
+  const [rolePresets, setRolePresets] = useState({});
+
+  useEffect(() => {
+    if (!selectedProvider || !providerModels.length) return;
+    const defaultModel = selectedProvider.default_model || providerModels[0];
+    setFormData((prev) => ({
+      ...prev,
+      planner: prev.planner || defaultModel,
+      executor: prev.executor || defaultModel,
+      reviewer: prev.reviewer || defaultModel,
+    }));
+  }, [providerModelsQuery.data, selectedProvider?.default_model]);
 
   async function load() {
     if (!getToken()) {
@@ -565,14 +809,16 @@ function AgentsTab() {
     }
     setStatus('loading');
     try {
-      const [agentsData, providersData, kbData] = await Promise.all([
+      const [agentsData, providersData, kbData, workflowData] = await Promise.all([
         listAgents(),
         listConfiguredProviders(),
         listKnowledgeBases(),
+        listWorkflows(),
       ]);
       setAgents(agentsData);
       setProviders(providersData);
       setKnowledgeBases(kbData || []);
+      setWorkflows(workflowData || []);
       setStatus('ready');
     } catch (err) {
       console.error(err);
@@ -585,6 +831,7 @@ function AgentsTab() {
       const response = await fetch(`${import.meta.env.VITE_API_URL || ''}/v1/agents/default-prompts`.replace(/\/$/, ''));
       const data = await response.json();
       setDefaultPrompts(data.default_prompts);
+      setRolePresets(data.role_presets || {});
     } catch (err) {
       console.error('Failed to load default prompts:', err);
     }
@@ -600,50 +847,7 @@ function AgentsTab() {
     window.setTimeout(() => setNotice(null), 4000);
   }
 
-  async function loadProviderModels(provider) {
-    if (!provider) {
-      setProviderModels([]);
-      return;
-    }
-    setModelsLoading(true);
-    setModelsError(null);
-
-    const seedModels = provider.enabled_models && provider.enabled_models.length > 0
-      ? [...provider.enabled_models]
-      : [];
-    setProviderModels(seedModels);
-
-    try {
-      const data = await fetchProviderModels(provider.provider_id);
-      const fetched = data.models || [];
-      const combined = Array.from(new Set([...seedModels, ...fetched]));
-      setProviderModels(combined);
-
-      const defaultMod = provider.default_model || combined[0] || '';
-      setFormData((prev) => ({
-        ...prev,
-        planner: prev.planner || defaultMod,
-        executor: prev.executor || defaultMod,
-        reviewer: prev.reviewer || defaultMod,
-      }));
-    } catch (err) {
-      setModelsError(err.message);
-      if (seedModels.length > 0) {
-        const defaultMod = provider.default_model || seedModels[0] || '';
-        setFormData((prev) => ({
-          ...prev,
-          planner: prev.planner || defaultMod,
-          executor: prev.executor || defaultMod,
-          reviewer: prev.reviewer || defaultMod,
-        }));
-      }
-    } finally {
-      setModelsLoading(false);
-    }
-  }
-
   function handleProviderSelect(providerId) {
-    const prov = providers.find((p) => p.id === providerId);
     setFormData((prev) => ({
       ...prev,
       provider_id: providerId,
@@ -651,11 +855,38 @@ function AgentsTab() {
       executor: '',
       reviewer: '',
     }));
-    if (prov) {
-      loadProviderModels(prov);
-    } else {
-      setProviderModels([]);
-    }
+  }
+
+  function openAgentForm(agent = null) {
+    setEditingAgent(agent);
+    const config = agent?.config || {};
+    const models = config.models || {};
+    setFormData({
+      name: agent?.name || '',
+      provider_id: agent?.provider_id || '',
+      planner: models.planner || '',
+      executor: models.executor || '',
+      reviewer: models.reviewer || '',
+      workflow_version_id: config.workflow_version_id || '',
+      context_window_tokens: config.context_window_tokens ?? 4096,
+      knowledge_base_ids: config.knowledge_base_ids || [],
+      system_prompt: config.system_prompt || 'You are a helpful assistant.',
+      router_prompt: config.router_prompt || '',
+      planner_prompt: config.planner_prompt || '',
+      executor_prompt: config.executor_prompt || '',
+      reviewer_prompt: config.reviewer_prompt || '',
+      direct_prompt: config.direct_prompt || '',
+      finalizer_prompt: config.finalizer_prompt || '',
+      controller_prompt: config.controller_prompt || '',
+      role_prompt_presets: config.role_prompt_presets || {},
+      role_instructions: config.role_instructions || {},
+    });
+    setShowAdvanced(Boolean(agent && [
+      config.router_prompt, config.planner_prompt, config.executor_prompt,
+      config.reviewer_prompt, config.direct_prompt, config.finalizer_prompt,
+      config.controller_prompt,
+    ].some(Boolean)));
+    setIsCreating(true);
   }
 
   async function handleCreate(e) {
@@ -664,40 +895,58 @@ function AgentsTab() {
       flash('Please select a provider.', 'error');
       return;
     }
+    if (!formData.workflow_version_id) {
+      flash('Choose a workflow before saving this agent. Create one from a preset or build a custom workflow in the Workflows section.', 'error');
+      return;
+    }
     if (!formData.planner || !formData.executor || !formData.reviewer) {
       flash('Please select models for planner, executor, and reviewer.', 'error');
       return;
     }
     try {
-      await createAgent({
+      const payload = {
+        ...(editingAgent?.config || {}),
         name: formData.name || 'New Agent',
         provider_id: formData.provider_id,
+        workflow_version_id: formData.workflow_version_id || null,
         models: {
           planner: formData.planner,
           executor: formData.executor,
           reviewer: formData.reviewer,
         },
+        context_window_tokens: formData.context_window_tokens === 'none'
+          ? null
+          : Number(formData.context_window_tokens) || 4096,
         knowledge_base_ids: formData.knowledge_base_ids,
         system_prompt: formData.system_prompt,
-        // Include custom prompts if provided
-        ...(formData.router_prompt && { router_prompt: formData.router_prompt }),
-        ...(formData.planner_prompt && { planner_prompt: formData.planner_prompt }),
-        ...(formData.executor_prompt && { executor_prompt: formData.executor_prompt }),
-        ...(formData.reviewer_prompt && { reviewer_prompt: formData.reviewer_prompt }),
-        ...(formData.direct_prompt && { direct_prompt: formData.direct_prompt }),
-        ...(formData.finalizer_prompt && { finalizer_prompt: formData.finalizer_prompt }),
-      });
+        router_prompt: formData.router_prompt || null,
+        planner_prompt: formData.planner_prompt || null,
+        executor_prompt: formData.executor_prompt || null,
+        reviewer_prompt: formData.reviewer_prompt || null,
+        direct_prompt: formData.direct_prompt || null,
+        finalizer_prompt: formData.finalizer_prompt || null,
+        controller_prompt: formData.controller_prompt || null,
+        role_prompt_presets: formData.role_prompt_presets || {},
+        role_instructions: formData.role_instructions || {},
+      };
+      if (editingAgent) await updateAgent(editingAgent.id, payload);
+      else await createAgent(payload);
       setIsCreating(false);
+      setEditingAgent(null);
       setFormData({
         name: '',
         provider_id: '',
         planner: '',
         executor: '',
         reviewer: '',
+        workflow_version_id: '',
+        context_window_tokens: 4096,
         knowledge_base_ids: [],
         system_prompt: 'You are a helpful assistant.',
+        role_prompt_presets: {},
+        role_instructions: {},
       });
-      flash('Agent created successfully!');
+      flash(editingAgent ? 'Agent updated successfully!' : 'Agent created successfully!');
       load();
     } catch (err) {
       flash(err.message, 'error');
@@ -718,12 +967,10 @@ function AgentsTab() {
   if (status === 'loading') return <div>Loading agents...</div>;
   if (status === 'error') return <div>Error loading agents.</div>;
 
-  const selectedProvider = providers.find((p) => p.id === formData.provider_id);
-
   if (isCreating) {
     return (
       <div className="agent-create-form">
-        <h3>Create New Agent</h3>
+        <h3>{editingAgent ? 'Edit Agent' : 'Create New Agent'}</h3>
         {notice && <div className={`tab-notice ${notice.kind}`}>{notice.message}</div>}
         <form onSubmit={handleCreate}>
           <div style={{ marginBottom: '1rem' }}>
@@ -752,6 +999,14 @@ function AgentsTab() {
               ))}
             </select>
           </div>
+          <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Workflow</label>
+            <select className="default-select" required value={formData.workflow_version_id || ''} onChange={(e) => setFormData({ ...formData, workflow_version_id: e.target.value })}>
+              <option value="">Select a workflow…</option>
+              {workflows.map((workflow) => <option key={workflow.version_id} value={workflow.version_id}>{workflow.name} · v{workflow.version}</option>)}
+            </select>
+            <span className="field-hint">Choose a saved workflow. This workflow decides which steps run and in what order. Create or customize workflows in the Workflows section.</span>
+          </div>
           {selectedProvider && (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
@@ -763,7 +1018,7 @@ function AgentsTab() {
                 <button
                   type="button"
                   className="btn g small"
-                  onClick={() => loadProviderModels(selectedProvider)}
+                  onClick={() => providerModelsQuery.refetch()}
                   disabled={modelsLoading}
                 >
                   {modelsLoading ? 'Loading…' : 'Refresh list'}
@@ -829,6 +1084,25 @@ function AgentsTab() {
             </>
           )}
 
+          <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Context Budget (tokens)</label>
+            <select
+              className="default-select"
+              value={formData.context_window_tokens ?? 'none'}
+              onChange={(e) => setFormData({ ...formData, context_window_tokens: e.target.value === 'none' ? 'none' : Number(e.target.value) })}
+            >
+              <option value="2048">2,048 tokens</option>
+              <option value="4096">4,096 tokens (default)</option>
+              <option value="8192">8,192 tokens</option>
+              <option value="16384">16,384 tokens</option>
+              <option value="32768">32,768 tokens</option>
+              <option value="65536">65,536 tokens</option>
+              <option value="128000">128,000 tokens</option>
+              <option value="none">No limit</option>
+            </select>
+            <span className="field-hint">Sets the approximate prompt budget per model call. “No limit” disables this app’s prompt cap; the selected model and provider still enforce their own context limit.</span>
+          </div>
+
           {knowledgeBases.length > 0 && (
             <div style={{ marginBottom: '1rem' }}>
               <label className="field-label">Knowledge Bases (Vector Retrieval / BYOD)</label>
@@ -864,12 +1138,65 @@ function AgentsTab() {
               onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
             />
           </div>
+
+          <div style={{ marginBottom: '1rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '8px', padding: '1rem' }}>
+            <label className="field-label">How workflow roles are used</label>
+            <div style={{ fontSize: '0.85rem', color: '#555', lineHeight: 1.55, margin: '0.35rem 0 1rem' }}>
+              <p style={{ margin: '0 0 0.5rem' }}><strong>The selected workflow defines the path.</strong> Fixed workflows continue through their configured steps in order. The Dynamic workflow starts with a routing decision, then continues through the selected configured path to completion. Workflows can also include conditional branches.</p>
+              <p style={{ margin: '0 0 0.5rem' }}>Each step selects a role such as Planner, Executor, Reviewer, or Final answer writer. That role’s prompt settings apply only when a step using that role runs; a Reviewer prompt does not cause a review step to be added.</p>
+              <p style={{ margin: 0 }}>The shared System Prompt is included with each step. The workflow step’s instructions and mapped inputs tell that role what to do for this particular task.</p>
+            </div>
+            <label className="field-label">Customize role behavior</label>
+            <p style={{ fontSize: '0.85rem', color: '#666', margin: '0.25rem 0 1rem' }}>
+              Choose a behavior preset and add optional guidance for roles used by this agent’s workflow. Add or remove workflow steps in the Workflows section.
+            </p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+              {AGENT_PROMPT_ROLES.map(([role, label, description]) => {
+                const presets = rolePresets[role] || [
+                  { id: 'balanced', name: 'Balanced', description: 'Use the built-in role behavior.' },
+                ];
+                const selectedPreset = formData.role_prompt_presets?.[role] || 'balanced';
+                const selectedInfo = presets.find((preset) => preset.id === selectedPreset);
+                return (
+                  <div key={role} style={{ padding: '0.75rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '6px' }}>
+                    <label className="field-label" htmlFor={`role-preset-${role}`}>{label}</label>
+                    <p style={{ fontSize: '0.78rem', color: '#666', lineHeight: 1.45, minHeight: '3.4em', margin: '0.15rem 0 0.5rem' }}>{description}</p>
+                    <select
+                      id={`role-preset-${role}`}
+                      className="default-select"
+                      value={selectedPreset}
+                      onChange={(e) => setFormData((prev) => ({
+                        ...prev,
+                        role_prompt_presets: { ...(prev.role_prompt_presets || {}), [role]: e.target.value },
+                      }))}
+                    >
+                      {presets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>{preset.name}</option>
+                      ))}
+                    </select>
+                    <span className="field-hint">{selectedInfo?.description || 'Uses the balanced built-in role behavior.'}</span>
+                    <textarea
+                      className="key-input"
+                      rows={2}
+                      style={{ marginTop: '0.5rem' }}
+                      value={formData.role_instructions?.[role] || ''}
+                      onChange={(e) => setFormData((prev) => ({
+                        ...prev,
+                        role_instructions: { ...(prev.role_instructions || {}), [role]: e.target.value },
+                      }))}
+                      placeholder={`Additional ${label.toLowerCase()} guidance (optional)`}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
           
           {/* Custom Prompts Section */}
           <div style={{ marginBottom: '1rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '8px', padding: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
               <label className="field-label" style={{ margin: 0 }}>
-                Custom Prompts <span style={{ fontSize: '0.75rem', color: '#888', fontWeight: 'normal' }}>(Optional - Advanced)</span>
+                Full prompt overrides <span style={{ fontSize: '0.75rem', color: '#888', fontWeight: 'normal' }}>(Optional - Advanced)</span>
               </label>
               <button
                 type="button"
@@ -883,35 +1210,7 @@ function AgentsTab() {
             {showAdvanced && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
                 <p style={{ fontSize: '0.85rem', color: '#666', margin: 0 }}>
-                  Customize how your agent processes requests. Leave blank to use defaults. 
-                  {defaultPrompts && (
-                    <button
-                      type="button"
-                      style={{
-                        marginLeft: '0.5rem',
-                        fontSize: '0.85rem',
-                        color: '#6467f2',
-                        background: 'none',
-                        border: 'none',
-                        cursor: 'pointer',
-                        textDecoration: 'underline'
-                      }}
-                      onClick={() => {
-                        // Load all defaults
-                        setFormData(prev => ({
-                          ...prev,
-                          router_prompt: defaultPrompts.router?.prompt || '',
-                          planner_prompt: defaultPrompts.planner?.prompt || '',
-                          executor_prompt: defaultPrompts.executor?.prompt || '',
-                          reviewer_prompt: defaultPrompts.reviewer?.prompt || '',
-                          direct_prompt: defaultPrompts.direct?.prompt || '',
-                          finalizer_prompt: defaultPrompts.finalizer?.prompt || '',
-                        }));
-                      }}
-                    >
-                      Load all defaults
-                    </button>
-                  )}
+                  These advanced fields replace the built-in role prompt and its selected preset. Clear an override to restore the built-in prompt plus role behavior settings.
                 </p>
                 
                 {/* Router Prompt */}
@@ -929,9 +1228,9 @@ function AgentsTab() {
                           cursor: 'pointer',
                           textDecoration: 'underline'
                         }}
-                        onClick={() => setFormData(prev => ({...prev, router_prompt: defaultPrompts.router.prompt}))}
+                        onClick={() => setFormData(prev => ({...prev, router_prompt: ''}))}
                       >
-                        Use default
+                        Clear override
                       </button>
                     )}
                   </div>
@@ -959,9 +1258,9 @@ function AgentsTab() {
                           cursor: 'pointer',
                           textDecoration: 'underline'
                         }}
-                        onClick={() => setFormData(prev => ({...prev, planner_prompt: defaultPrompts.planner.prompt}))}
+                        onClick={() => setFormData(prev => ({...prev, planner_prompt: ''}))}
                       >
-                        Use default
+                        Clear override
                       </button>
                     )}
                   </div>
@@ -989,9 +1288,9 @@ function AgentsTab() {
                           cursor: 'pointer',
                           textDecoration: 'underline'
                         }}
-                        onClick={() => setFormData(prev => ({...prev, executor_prompt: defaultPrompts.executor.prompt}))}
+                        onClick={() => setFormData(prev => ({...prev, executor_prompt: ''}))}
                       >
-                        Use default
+                        Clear override
                       </button>
                     )}
                   </div>
@@ -1019,9 +1318,9 @@ function AgentsTab() {
                           cursor: 'pointer',
                           textDecoration: 'underline'
                         }}
-                        onClick={() => setFormData(prev => ({...prev, reviewer_prompt: defaultPrompts.reviewer.prompt}))}
+                        onClick={() => setFormData(prev => ({...prev, reviewer_prompt: ''}))}
                       >
-                        Use default
+                        Clear override
                       </button>
                     )}
                   </div>
@@ -1034,6 +1333,27 @@ function AgentsTab() {
                   />
                 </div>
                 
+                {/* Controller Prompt */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Workflow Controller Override</label>
+                    {defaultPrompts?.controller && (
+                      <button
+                        type="button"
+                        style={{ fontSize: '0.75rem', color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                        onClick={() => setFormData(prev => ({ ...prev, controller_prompt: '' }))}
+                      >Clear override</button>
+                    )}
+                  </div>
+                  <textarea
+                    className="key-input"
+                    rows={3}
+                    value={formData.controller_prompt}
+                    onChange={(e) => setFormData({ ...formData, controller_prompt: e.target.value })}
+                    placeholder="Replace the built-in controller instructions (advanced)"
+                  />
+                </div>
+
                 {/* Direct Prompt */}
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
@@ -1049,9 +1369,9 @@ function AgentsTab() {
                           cursor: 'pointer',
                           textDecoration: 'underline'
                         }}
-                        onClick={() => setFormData(prev => ({...prev, direct_prompt: defaultPrompts.direct.prompt}))}
+                        onClick={() => setFormData(prev => ({...prev, direct_prompt: ''}))}
                       >
-                        Use default
+                        Clear override
                       </button>
                     )}
                   </div>
@@ -1079,9 +1399,9 @@ function AgentsTab() {
                           cursor: 'pointer',
                           textDecoration: 'underline'
                         }}
-                        onClick={() => setFormData(prev => ({...prev, finalizer_prompt: defaultPrompts.finalizer.prompt}))}
+                        onClick={() => setFormData(prev => ({...prev, finalizer_prompt: ''}))}
                       >
-                        Use default
+                        Clear override
                       </button>
                     )}
                   </div>
@@ -1103,11 +1423,11 @@ function AgentsTab() {
           </div>
           
           <div className="modal-actions">
-            <button type="button" className="btn g" onClick={() => setIsCreating(false)}>
+            <button type="button" className="btn g" onClick={() => { setIsCreating(false); setEditingAgent(null); }}>
               Cancel
             </button>
             <button type="submit" className="btn p">
-              Create Agent
+              {editingAgent ? 'Save Changes' : 'Create Agent'}
             </button>
           </div>
         </form>
@@ -1120,7 +1440,7 @@ function AgentsTab() {
       {notice && <div className={`tab-notice ${notice.kind}`}>{notice.message}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
         <p className="providers-intro">Manage your intelligent agents and their pipelines.</p>
-        <button className="btn p" onClick={() => setIsCreating(true)}>
+        <button className="btn p" onClick={() => openAgentForm()}>
           + Create Agent
         </button>
       </div>
@@ -1130,7 +1450,7 @@ function AgentsTab() {
           <div className="empty-icon">🤖</div>
           <h3>No agents yet</h3>
           <p>Get started by creating your first agent.</p>
-          <button className="btn p" onClick={() => setIsCreating(true)}>Create Agent</button>
+          <button className="btn p" onClick={() => openAgentForm()}>Create Agent</button>
         </div>
       ) : (
         <div className="provider-grid">
@@ -1162,13 +1482,20 @@ function AgentsTab() {
                     <strong>Attached KBs:</strong> {kbIds.length} connected
                   </div>
                 )}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', alignSelf: 'flex-end' }}>
+                <button
+                  className="btn g small"
+                  onClick={() => openAgentForm(agent)}
+                >
+                  Edit
+                </button>
                 <button 
                   className="btn danger small" 
-                  style={{ marginTop: '0.5rem', alignSelf: 'flex-end' }}
                   onClick={() => handleDelete(agent.id)}
                 >
                   Delete
                 </button>
+                </div>
               </div>
             );
           })}
@@ -1183,10 +1510,8 @@ function KnowledgeTab() {
   const [providers, setProviders] = useState([]);
   const [status, setStatus] = useState('loading');
   const [isCreating, setIsCreating] = useState(false);
+  const [editingKb, setEditingKb] = useState(null);
   const [notice, setNotice] = useState(null);
-
-  const [availableModels, setAvailableModels] = useState([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -1197,6 +1522,15 @@ function KnowledgeTab() {
     vector_index_host: '',
     rerank_model: 'bge-reranker-v2-m3',
   });
+  const selectedProvider = providers.find((p) => p.id === formData.provider_id);
+  const providerModelsQuery = useProviderModels(selectedProvider?.provider_id, {
+    enabled: isCreating && Boolean(selectedProvider),
+  });
+  const embeddingModels = Array.from(new Set([
+    ...(providerModelsQuery.data || []).filter((model) => /embed|bge|voyage/i.test(model)),
+    formData.embedding_model,
+  ].filter(Boolean)));
+  const modelsLoading = providerModelsQuery.isLoading || providerModelsQuery.isFetching;
 
   async function load() {
     if (!getToken()) {
@@ -1227,34 +1561,29 @@ function KnowledgeTab() {
     window.setTimeout(() => setNotice(null), 4000);
   }
 
-  async function handleProviderSelect(providerId) {
-    const prov = providers.find((p) => p.id === providerId);
-    setFormData((prev) => ({ ...prev, provider_id: providerId, embedding_model: '' }));
-    if (!prov) {
-      setAvailableModels([]);
-      return;
-    }
-
-    setModelsLoading(true);
-    const presets = prov.provider_id === 'nvidia'
-      ? ['nvidia/nv-embedqa-e5-v5', 'nvidia/llama-3.2-nv-embedqa-1b-v1']
-      : ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'];
-
-    try {
-      const data = await fetchProviderModels(prov.provider_id);
-      const fetched = (data.models || []).filter((m) =>
-        m.toLowerCase().includes('embed') || m.toLowerCase().includes('bge') || m.toLowerCase().includes('nv-embed')
-      );
-      const combined = Array.from(new Set([...presets, ...fetched]));
-      setAvailableModels(combined);
-      setFormData((prev) => ({ ...prev, embedding_model: combined[0] || '' }));
-    } catch (err) {
-      setAvailableModels(presets);
-      setFormData((prev) => ({ ...prev, embedding_model: presets[0] || '' }));
-    } finally {
-      setModelsLoading(false);
-    }
+  function openKnowledgeBaseForm(kb = null) {
+    setEditingKb(kb);
+    setFormData({
+      name: kb?.name || '',
+      provider_id: kb?.provider_id || '',
+      embedding_model: kb?.embedding_model || '',
+      use_custom_vector_db: kb ? Boolean(kb.has_custom_vector_db) : true,
+      vector_api_key: '',
+      vector_index_host: '',
+      rerank_model: kb?.rerank_model || 'bge-reranker-v2-m3',
+    });
+    setIsCreating(true);
   }
+
+  function handleProviderSelect(providerId) {
+    setFormData((prev) => ({ ...prev, provider_id: providerId, embedding_model: '' }));
+  }
+
+  useEffect(() => {
+    if (!formData.embedding_model && embeddingModels.length) {
+      setFormData((prev) => prev.embedding_model ? prev : { ...prev, embedding_model: embeddingModels[0] });
+    }
+  }, [providerModelsQuery.data, formData.embedding_model]);
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -1262,22 +1591,38 @@ function KnowledgeTab() {
       flash('Please select an embedding provider and model.', 'error');
       return;
     }
-    if (formData.use_custom_vector_db) {
+    if (formData.use_custom_vector_db && !editingKb) {
       if (!formData.vector_api_key.trim() || !formData.vector_index_host.trim()) {
         flash('Please provide both Pinecone API key and Index Host, or uncheck custom vector DB.', 'error');
         return;
       }
     }
+    if (formData.use_custom_vector_db && (formData.vector_api_key.trim() || formData.vector_index_host.trim()) &&
+        (!formData.vector_api_key.trim() || !formData.vector_index_host.trim())) {
+      flash('To rotate Pinecone credentials, provide both the API key and Index Host.', 'error');
+      return;
+    }
     try {
-      await createKnowledgeBase({
+      const payload = {
         name: formData.name || 'New Knowledge Base',
         provider_id: formData.provider_id,
         embedding_model: formData.embedding_model,
-        vector_api_key: formData.use_custom_vector_db ? formData.vector_api_key.trim() : null,
-        vector_index_host: formData.use_custom_vector_db ? formData.vector_index_host.trim() : null,
         rerank_model: formData.rerank_model || 'bge-reranker-v2-m3',
-      });
+      };
+      if (editingKb) {
+        if (!formData.use_custom_vector_db) payload.clear_custom_vector_db = true;
+        else if (formData.vector_api_key.trim() && formData.vector_index_host.trim()) {
+          payload.vector_api_key = formData.vector_api_key.trim();
+          payload.vector_index_host = formData.vector_index_host.trim();
+        }
+        await updateKnowledgeBase(editingKb.id, payload);
+      } else {
+        payload.vector_api_key = formData.use_custom_vector_db ? formData.vector_api_key.trim() : null;
+        payload.vector_index_host = formData.use_custom_vector_db ? formData.vector_index_host.trim() : null;
+        await createKnowledgeBase(payload);
+      }
       setIsCreating(false);
+      setEditingKb(null);
       setFormData({
         name: '',
         provider_id: '',
@@ -1287,7 +1632,7 @@ function KnowledgeTab() {
         vector_index_host: '',
         rerank_model: 'bge-reranker-v2-m3',
       });
-      flash('Knowledge Base created successfully!');
+      flash(editingKb ? 'Knowledge Base updated successfully!' : 'Knowledge Base created successfully!');
       load();
     } catch (err) {
       flash(err.message, 'error');
@@ -1308,12 +1653,10 @@ function KnowledgeTab() {
   if (status === 'loading') return <div>Loading knowledge bases...</div>;
   if (status === 'error') return <div>Error loading knowledge bases.</div>;
 
-  const selectedProvider = providers.find((p) => p.id === formData.provider_id);
-
   if (isCreating) {
     return (
       <div className="agent-create-form">
-        <h3>Create New Knowledge Base</h3>
+        <h3>{editingKb ? 'Edit Knowledge Base' : 'Create New Knowledge Base'}</h3>
         {notice && <div className={`tab-notice ${notice.kind}`}>{notice.message}</div>}
         <form onSubmit={handleCreate}>
           <div style={{ marginBottom: '1rem' }}>
@@ -1346,20 +1689,42 @@ function KnowledgeTab() {
 
           {selectedProvider && (
             <div style={{ marginBottom: '1rem' }}>
-              <label className="field-label">Embedding Model</label>
-              <select
-                className="default-select"
-                value={formData.embedding_model}
-                onChange={(e) => setFormData({ ...formData, embedding_model: e.target.value })}
-                required
-              >
-                <option value="">Select embedding model...</option>
-                {availableModels.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label className="field-label">Embedding Model</label>
+                <button
+                  type="button"
+                  className="btn g small"
+                  onClick={() => providerModelsQuery.refetch()}
+                  disabled={modelsLoading}
+                >
+                  {modelsLoading ? 'Loading…' : 'Refresh list'}
+                </button>
+              </div>
+              {modelsLoading && <div className="models-status">Loading provider models…</div>}
+              {embeddingModels.length > 0 ? (
+                <select
+                  className="default-select"
+                  value={formData.embedding_model}
+                  onChange={(e) => setFormData({ ...formData, embedding_model: e.target.value })}
+                  required
+                >
+                  <option value="">Select embedding model...</option>
+                  {embeddingModels.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="key-input"
+                  value={formData.embedding_model}
+                  onChange={(e) => setFormData({ ...formData, embedding_model: e.target.value })}
+                  placeholder="No embedding models returned; enter a model ID"
+                  required
+                />
+              )}
+              {providerModelsQuery.error && (
+                <div className="field-hint">Could not load model list ({providerModelsQuery.error.message}); enter an embedding model ID.</div>
+              )}
             </div>
           )}
 
@@ -1371,12 +1736,13 @@ function KnowledgeTab() {
                   checked={formData.use_custom_vector_db}
                   onChange={(e) => setFormData({ ...formData, use_custom_vector_db: e.target.checked })}
                 />
-                Bring Your Own Vector DB (Pinecone)
+              Bring Your Own Vector DB (Pinecone)
               </label>
               <span className="provider-badge ok">BYOD Secured</span>
             </div>
             <p className="field-hint" style={{ marginTop: 0 }}>
               Vectors will reside inside your Pinecone account. Credentials are encrypted at rest.
+              {editingKb && formData.use_custom_vector_db && ' Leave both credential fields blank to keep the current credentials.'}
             </p>
 
             {formData.use_custom_vector_db && (
@@ -1386,10 +1752,10 @@ function KnowledgeTab() {
                   <input
                     type="password"
                     className="key-input"
-                    placeholder="pcsk_..."
+                    placeholder={editingKb ? 'Leave blank to keep current key' : 'pcsk_...'}
                     value={formData.vector_api_key}
                     onChange={(e) => setFormData({ ...formData, vector_api_key: e.target.value })}
-                    required={formData.use_custom_vector_db}
+                    required={formData.use_custom_vector_db && !editingKb}
                   />
                 </div>
                 <div style={{ marginBottom: '0.75rem' }}>
@@ -1397,10 +1763,10 @@ function KnowledgeTab() {
                   <input
                     type="text"
                     className="key-input"
-                    placeholder="https://your-index-name-xxx.svc.pinecone.io"
+                    placeholder={editingKb ? (editingKb.vector_index_host || 'Leave blank to keep current host') : 'https://your-index-name-xxx.svc.pinecone.io'}
                     value={formData.vector_index_host}
                     onChange={(e) => setFormData({ ...formData, vector_index_host: e.target.value })}
-                    required={formData.use_custom_vector_db}
+                    required={formData.use_custom_vector_db && !editingKb}
                   />
                 </div>
               </>
@@ -1412,19 +1778,26 @@ function KnowledgeTab() {
             <input
               type="text"
               className="key-input"
+              list="pinecone-reranker-models"
               value={formData.rerank_model}
               onChange={(e) => setFormData({ ...formData, rerank_model: e.target.value })}
               placeholder="bge-reranker-v2-m3"
             />
-            <span className="field-hint">Re-scores vector matches for enhanced retrieval precision.</span>
+            <datalist id="pinecone-reranker-models">
+              <option value="bge-reranker-v2-m3" />
+              {formData.rerank_model && formData.rerank_model !== 'bge-reranker-v2-m3' && (
+                <option value={formData.rerank_model} />
+              )}
+            </datalist>
+            <span className="field-hint">Choose the built-in reranker or enter a custom Pinecone reranker model ID.</span>
           </div>
 
           <div className="modal-actions">
-            <button type="button" className="btn g" onClick={() => setIsCreating(false)}>
+            <button type="button" className="btn g" onClick={() => { setIsCreating(false); setEditingKb(null); }}>
               Cancel
             </button>
             <button type="submit" className="btn p">
-              Create Knowledge Base
+              {editingKb ? 'Save Changes' : 'Create Knowledge Base'}
             </button>
           </div>
         </form>
@@ -1437,7 +1810,7 @@ function KnowledgeTab() {
       {notice && <div className={`tab-notice ${notice.kind}`}>{notice.message}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2rem' }}>
         <p className="providers-intro">Configure your vector knowledge bases and custom Pinecone endpoints.</p>
-        <button className="btn p" onClick={() => setIsCreating(true)}>
+        <button className="btn p" onClick={() => openKnowledgeBaseForm()}>
           + Create Knowledge Base
         </button>
       </div>
@@ -1447,7 +1820,7 @@ function KnowledgeTab() {
           <div className="empty-icon">📚</div>
           <h3>No knowledge bases yet</h3>
           <p>Bring your own vector database and connect your documents to your agents.</p>
-          <button className="btn p" onClick={() => setIsCreating(true)}>Create Knowledge Base</button>
+          <button className="btn p" onClick={() => openKnowledgeBaseForm()}>Create Knowledge Base</button>
         </div>
       ) : (
         <div className="provider-grid">
@@ -1473,13 +1846,20 @@ function KnowledgeTab() {
                   )}
                   {kb.rerank_model && <div><strong>Reranker:</strong> {kb.rerank_model}</div>}
                 </div>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', alignSelf: 'flex-end' }}>
+                <button
+                  className="btn g small"
+                  onClick={() => openKnowledgeBaseForm(kb)}
+                >
+                  Edit
+                </button>
                 <button
                   className="btn danger small"
-                  style={{ marginTop: '0.5rem', alignSelf: 'flex-end' }}
                   onClick={() => handleDelete(kb.id)}
                 >
                   Delete
                 </button>
+                </div>
               </div>
             );
           })}
@@ -1747,6 +2127,18 @@ export default function Dashboard({ loggedIn, user, onLogout }) {
               Agents
             </button>
             <button
+              className={`nav-item ${activeTab === 'workflows' ? 'active' : ''}`}
+              onClick={() => setActiveTab('workflows')}
+            >
+              Workflows
+            </button>
+            <button
+              className={`nav-item ${activeTab === 'runs' ? 'active' : ''}`}
+              onClick={() => setActiveTab('runs')}
+            >
+              Runs
+            </button>
+            <button
               className={`nav-item ${activeTab === 'providers' ? 'active' : ''}`}
               onClick={() => setActiveTab('providers')}
             >
@@ -1790,6 +2182,10 @@ export default function Dashboard({ loggedIn, user, onLogout }) {
               <ProvidersTab />
             ) : activeTab === 'agents' ? (
               <AgentsTab />
+            ) : activeTab === 'workflows' ? (
+              <WorkflowsTab />
+            ) : activeTab === 'runs' ? (
+              <RunsTab />
             ) : activeTab === 'knowledge' ? (
               <KnowledgeTab />
             ) : activeTab === 'api-keys' ? (
