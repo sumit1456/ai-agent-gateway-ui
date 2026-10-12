@@ -1,4 +1,4 @@
-import BlackholeImproved from '../components/BlackHoleImproved';
+import BlackholeImproved from '../components/BlackholeImproved';
 import BlackHoleParticleField from '../components/BlackHoleParticleField';
 import Footer from '../components/Footer';
 import Reveal from '../components/Reveal';
