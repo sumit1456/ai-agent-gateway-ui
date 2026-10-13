@@ -10,7 +10,7 @@ RUN npm run build
 
 FROM nginx:alpine
 
-ENV BACKEND_URL=http://backend:8000
+ENV BACKEND_URL=https://agent-gateway-server.corstack.in
 
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
