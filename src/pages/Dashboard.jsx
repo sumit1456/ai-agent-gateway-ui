@@ -26,6 +26,13 @@ import {
   deleteKnowledgeBase,
   createApiKey,
   listApiKeys,
+  getWebhook,
+  saveWebhook,
+  rotateWebhookSecret,
+  testWebhook,
+  deleteWebhook,
+  listWebhookDeliveries,
+  retryWebhookDelivery,
   runAgent,
   streamRun,
 } from '../api';
@@ -1522,6 +1529,22 @@ function IntegrationTab() {
   const [runOutput, setRunOutput] = useState('');
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [webhook, setWebhook] = useState(null);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [deliveries, setDeliveries] = useState([]);
+  const [webhookNotice, setWebhookNotice] = useState(null);
+  const [webhookBusy, setWebhookBusy] = useState(false);
+
+  async function loadWebhookData() {
+    try {
+      const [configuration, history] = await Promise.all([getWebhook(), listWebhookDeliveries()]);
+      const endpoint = configuration.endpoint || null;
+      setWebhook(endpoint);
+      setWebhookUrl(endpoint?.url || '');
+      setDeliveries(history.deliveries || []);
+    } catch (err) { setWebhookNotice({ kind: 'error', message: err.message }); }
+  }
 
   useEffect(() => {
     listAgents().then((rows) => {
@@ -1530,11 +1553,86 @@ function IntegrationTab() {
     }).catch((err) => setError(err.message)).finally(() => setLoadingAgents(false));
   }, []);
 
+  useEffect(() => { loadWebhookData(); }, []);
+
   const examples = {
-    react: `// React component: call YOUR backend, never the gateway token from the browser.\nimport { useState } from 'react';\n\nexport function AgentChat() {\n  const [answer, setAnswer] = useState('');\n  const [busy, setBusy] = useState(false);\n\n  async function send(message) {\n    setBusy(true);\n    try {\n      // Your backend authenticates the signed-in user and supplies their trusted ID.\n      const response = await fetch('/api/agent-chat', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ message, sessionId: 'conversation-123' }),\n        credentials: 'include',\n      });\n      const data = await response.json();\n      if (!response.ok) throw new Error(data.error || 'Request failed');\n      setAnswer(data.answer);\n    } finally { setBusy(false); }\n  }\n\n  return <section>\n    <button disabled={busy} onClick={() => send('Hello!')}>Ask agent</button>\n    <p>{answer}</p>\n  </section>;\n}`,
-    node: `// Node.js / Express backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport express from 'express';\n\nconst app = express();\napp.use(express.json());\napp.post('/api/agent-chat', requireYourUserAuth, async (req, res) => {\n  const userId = req.user.id; // Set by your verified authentication middleware\n  const gateway = await fetch('${INTEGRATION_BASE_URL}/v1/agents/${selectedId || '<AGENT_ID>'}/run', {\n    method: 'POST',\n    headers: {\n      Authorization: \`Bearer \${process.env.AGENT_GATEWAY_TOKEN}\`,\n      'Content-Type': 'application/json',\n      'X-End-User-ID': String(userId),\n      'X-Session-ID': req.body.sessionId, // optional; reuse to continue a conversation\n    },\n    body: JSON.stringify({ input: req.body.message }),\n  });\n  const run = await gateway.json();\n  if (!gateway.ok) return res.status(gateway.status).json({ error: run.detail || 'Gateway request failed' });\n  // Poll GET /v1/runs/{run_id} with the same bearer token until status is complete.\n  res.json({ runId: run.run_id, sessionId: run.session_id, status: run.status });\n});`,
-    python: `# Python / FastAPI backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport os\nimport httpx\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\nGATEWAY = '${INTEGRATION_BASE_URL}'\nAGENT_ID = '${selectedId || '<AGENT_ID>'}'\n\n@app.post('/api/agent-chat')\nasync def agent_chat(body: dict, user=Depends(require_your_user_auth)):\n    # user.id comes from your verified authentication middleware.\n    async with httpx.AsyncClient() as client:\n        response = await client.post(\n            f'{GATEWAY}/v1/agents/{AGENT_ID}/run',\n            headers={\n                'Authorization': f"Bearer {os.environ['AGENT_GATEWAY_TOKEN']}",\n                'X-End-User-ID': str(user.id),\n                'X-Session-ID': body.get('sessionId', ''),\n            },\n            json={'input': body['message']},\n        )\n        response.raise_for_status()\n        return response.json() # poll /v1/runs/{run_id} for the finished answer\n`,
+    react: `// React component: call YOUR backend, never the gateway token from the browser.\nimport { useState } from 'react';\n\nexport function AgentChat() {\n  const [answer, setAnswer] = useState('');\n  const [busy, setBusy] = useState(false);\n\n  async function send(message) {\n    setBusy(true);\n    try {\n      // Your backend authenticates the signed-in user and supplies their trusted ID.\n      const response = await fetch('/api/agent-chat', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ message, sessionId: 'conversation-123' }),\n        credentials: 'include',\n      });\n      const data = await response.json();\n      if (!response.ok) throw new Error(data.error || 'Request failed');\n      setAnswer('Run queued: ' + data.runId + '. The result arrives at your backend webhook.');\n    } finally { setBusy(false); }\n  }\n\n  return <section>\n    <button disabled={busy} onClick={() => send('Hello!')}>Ask agent</button>\n    <p>{answer}</p>\n  </section>;\n}`,
+    node: `// Node.js / Express backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport express from 'express';\n\nconst app = express();\napp.use(express.json());\napp.post('/api/agent-chat', requireYourUserAuth, async (req, res) => {\n  const userId = req.user.id; // Set by your verified authentication middleware\n  const gateway = await fetch('${INTEGRATION_BASE_URL}/v1/agents/${selectedId || '<AGENT_ID>'}/run', {\n    method: 'POST',\n    headers: {\n      Authorization: \`Bearer \${process.env.AGENT_GATEWAY_TOKEN}\`,\n      'Content-Type': 'application/json',\n      'X-End-User-ID': String(userId),\n      'X-Session-ID': req.body.sessionId, // optional; reuse to continue a conversation\n    },\n    body: JSON.stringify({ input: req.body.message }),\n  });\n  const run = await gateway.json();\n  if (!gateway.ok) return res.status(gateway.status).json({ error: run.detail || 'Gateway request failed' });\n  // Result delivery happens at your registered webhook; no result polling is needed.\n  res.status(202).json({ runId: run.run_id, sessionId: run.session_id, status: run.status });\n});`,
+    python: `# Python / FastAPI backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport os\nimport httpx\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\nGATEWAY = '${INTEGRATION_BASE_URL}'\nAGENT_ID = '${selectedId || '<AGENT_ID>'}'\n\n@app.post('/api/agent-chat')\nasync def agent_chat(body: dict, user=Depends(require_your_user_auth)):\n    # user.id comes from your verified authentication middleware.\n    async with httpx.AsyncClient() as client:\n        response = await client.post(\n            f'{GATEWAY}/v1/agents/{AGENT_ID}/run',\n            headers={\n                'Authorization': f"Bearer {os.environ['AGENT_GATEWAY_TOKEN']}",\n                'X-End-User-ID': str(user.id),\n                'X-Session-ID': body.get('sessionId', ''),\n            },\n            json={'input': body['message']},\n        )\n        response.raise_for_status()\n        return response.json() # result arrives at your registered webhook\n`,
   };
+
+  const receiverExample = `// Minimal Express receiver. Add this route to your existing backend project.
+import express from 'express';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+const app = express();
+const secret = process.env.AGW_WEBHOOK_SECRET;
+if (!secret) throw new Error('AGW_WEBHOOK_SECRET is required');
+
+// IMPORTANT: register this route before app.use(express.json()).
+// Signature verification needs the original, unparsed request bytes.
+app.post('/webhooks/agent-gateway', express.raw({ type: 'application/json' }), async (req, res) => {
+  const received = req.get('X-AGW-Signature') || '';
+  const expected = 'sha256=' + createHmac('sha256', secret).update(req.body).digest('hex');
+  const a = Buffer.from(received);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return res.sendStatus(401);
+
+  const event = JSON.parse(req.body.toString('utf8'));
+  // TODO: save event.id uniquely and update the PDF job linked to event.run_id.
+  console.log('Agent Gateway event:', event.type, event.run_id || event.id);
+  res.sendStatus(204); // Return 2xx only after your database has recorded the event.
+});
+
+app.listen(process.env.PORT || 3000);`;
+
+  async function saveWebhookEndpoint(event) {
+    event.preventDefault();
+    setWebhookBusy(true); setWebhookNotice(null); setWebhookSecret('');
+    try {
+      const response = await saveWebhook(webhookUrl);
+      setWebhook(response.endpoint);
+      if (response.signing_secret) setWebhookSecret(response.signing_secret);
+      setWebhookNotice({ kind: 'success', message: response.signing_secret ? 'Saved. Copy the signing secret now; it is shown only once.' : 'Webhook endpoint saved.' });
+      await loadWebhookData();
+    } catch (err) { setWebhookNotice({ kind: 'error', message: err.message }); }
+    finally { setWebhookBusy(false); }
+  }
+
+  async function rotateSecret() {
+    if (!window.confirm('Rotate the signing secret? Update your receiver immediately. Queued deliveries are updated to use the new secret.')) return;
+    setWebhookBusy(true); setWebhookNotice(null);
+    try {
+      const response = await rotateWebhookSecret();
+      setWebhook(response.endpoint);
+      setWebhookSecret(response.signing_secret);
+      setWebhookNotice({ kind: 'success', message: 'Secret rotated. Copy it and update your receiver.' });
+    } catch (err) { setWebhookNotice({ kind: 'error', message: err.message }); }
+    finally { setWebhookBusy(false); }
+  }
+
+  async function sendTestWebhook() {
+    setWebhookBusy(true); setWebhookNotice(null);
+    try {
+      const response = await testWebhook();
+      setWebhookNotice({ kind: 'success', message: `Test event queued (${response.delivery_id}).` });
+      window.setTimeout(loadWebhookData, 1200);
+    } catch (err) { setWebhookNotice({ kind: 'error', message: err.message }); }
+    finally { setWebhookBusy(false); }
+  }
+
+  async function removeWebhook() {
+    if (!window.confirm('Remove this webhook? New runs will no longer send results to it.')) return;
+    setWebhookBusy(true);
+    try { await deleteWebhook(); setWebhook(null); setWebhookUrl(''); setWebhookSecret(''); await loadWebhookData(); }
+    catch (err) { setWebhookNotice({ kind: 'error', message: err.message }); }
+    finally { setWebhookBusy(false); }
+  }
+
+  async function retryDelivery(id) {
+    try { await retryWebhookDelivery(id); await loadWebhookData(); setWebhookNotice({ kind: 'success', message: 'Delivery queued for retry.' }); }
+    catch (err) { setWebhookNotice({ kind: 'error', message: err.message }); }
+  }
 
   async function execute() {
     if (!selectedId || !prompt.trim()) return;
@@ -1596,6 +1694,46 @@ function IntegrationTab() {
     <section className="integration-intro">
       <p className="field-hint">Connect your app to an agent with these starter examples, then try a request in the playground.</p>
       <div className="integration-warning"><strong>Protect your gateway token.</strong> Use it only on your server, stored in an environment variable. Never put it in React/browser code. Authenticate each end user in your own backend and derive <code>X-End-User-ID</code> from that verified identity; do not trust an ID sent by the browser.</div>
+    </section>
+
+    <section className="integration-panel">
+      <h3>Result webhook</h3>
+      <p className="field-hint">Register a public HTTPS endpoint in your backend. We POST run results there after saving them. Your API key authenticates requests to us; the separate signing secret below authenticates our callbacks to you.</p>
+      {webhookNotice && <div className={`tab-notice ${webhookNotice.kind}`}>{webhookNotice.message}</div>}
+      <form onSubmit={saveWebhookEndpoint}>
+        <label className="field-label" htmlFor="webhook-url">Your receiver URL</label>
+        <input id="webhook-url" className="key-input" type="url" required maxLength={2048} placeholder="https://your-company.com/webhooks/agent-gateway" value={webhookUrl} onChange={(event) => setWebhookUrl(event.target.value)} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <button className="btn p" type="submit" disabled={webhookBusy}>{webhook ? 'Save endpoint' : 'Register endpoint'}</button>
+          {webhook && <>
+            <button className="btn g" type="button" disabled={webhookBusy} onClick={sendTestWebhook}>Send test event</button>
+            <button className="btn g" type="button" disabled={webhookBusy} onClick={rotateSecret}>Rotate signing secret</button>
+            <button className="btn danger" type="button" disabled={webhookBusy} onClick={removeWebhook}>Remove</button>
+          </>}
+        </div>
+      </form>
+      {webhookSecret && <div className="integration-secret"><strong>Signing secret — copy it now; it will not be shown again.</strong><code>{webhookSecret}</code><span>Store this as <code>AGW_WEBHOOK_SECRET</code> in your receiver’s server environment. It is not your gateway API key.</span></div>}
+      {webhook && <p className="field-hint">Configured for <code>{webhook.url}</code>. Events sent: <code>run.completed</code>, <code>run.failed</code>, and test event <code>webhook.test</code>.</p>}
+      <details className="webhook-receiver-guide">
+        <summary>Detailed guide: create the receiver in your backend project</summary>
+        <ol className="webhook-setup-steps">
+          <li><strong>Add a POST route to your backend.</strong> In your backend project, add an Express route at <code>/webhooks/agent-gateway</code> (install Express with <code>npm install express</code> if the project does not already use it). This is code in your project, not a URL created in the Agent Gateway dashboard.</li>
+          <li><strong>Verify and handle the request.</strong> Use the raw body to validate <code>X-AGW-Signature</code> with your signing secret. Store the event in your database before returning <code>2xx</code>. Use payload <code>id</code> as a unique key so retries do not process the same result twice.</li>
+          <li><strong>Set the secret on your server.</strong> Copy the <code>whsec_...</code> value shown when registering or rotating the endpoint into your backend environment as <code>AGW_WEBHOOK_SECRET</code>. Never put it in frontend/browser code. Keep the separate <code>gw_...</code> API key for requests to Agent Gateway.</li>
+          <li><strong>Deploy the backend route.</strong> It must be reachable from the internet over HTTPS. The full URL will look like <code>https://your-company.com/webhooks/agent-gateway</code>. For local development, use an HTTPS tunnel and register its temporary public URL.</li>
+          <li><strong>Register and verify it here.</strong> Paste that full URL above and click <em>Register endpoint</em>. Click <em>Send test event</em>; confirm it appears in your backend logs and the dashboard shows a delivered response.</li>
+          <li><strong>Connect results to your PDF job.</strong> When your backend starts a run, save the returned <code>run_id</code> with your PDF job. When <code>run.completed</code> or <code>run.failed</code> arrives, use that ID to update the matching job. The API key is used only to start runs; the signing secret is used only to verify callbacks.</li>
+        </ol>
+        <p className="field-hint">The sample below is a minimal Node/Express server. If your project already has an Express app, add only the route to that app; do not create a second server. Put it before global <code>express.json()</code> middleware or the raw request bytes needed for signature verification may be lost. Replace the TODO with your database update before acknowledging the event.</p>
+        <pre className="integration-code"><code>{receiverExample}</code></pre>
+      </details>
+      <div className="webhook-deliveries-heading"><strong>Recent deliveries</strong><button className="btn g small" type="button" onClick={loadWebhookData}>Refresh</button></div>
+      {deliveries.length ? <div className="webhook-deliveries">{deliveries.map((delivery) => <article className="webhook-delivery" key={delivery.id}>
+        <div><strong>{delivery.event_type}</strong><code>{delivery.run_id || delivery.id}</code></div>
+        <span className={`webhook-status ${delivery.status}`}>{delivery.status} · {delivery.attempts} attempt{delivery.attempts === 1 ? '' : 's'}</span>
+        <span>{delivery.last_status_code ? `HTTP ${delivery.last_status_code}` : delivery.last_error || 'Waiting to send'}</span>
+        {delivery.status === 'failed' && <button className="btn g small" type="button" onClick={() => retryDelivery(delivery.id)}>Retry</button>}
+      </article>)}</div> : <p className="field-hint">No deliveries yet. Use “Send test event” to verify the receiver.</p>}
     </section>
 
     <section className="integration-panel">
