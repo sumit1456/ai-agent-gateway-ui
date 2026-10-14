@@ -11,11 +11,6 @@ export default defineConfig({
       usePolling: true,
       interval: 500,
     },
-    proxy: {
-      '/auth': 'http://localhost:8000',
-      '/v1': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
-    },
   },
   test: {
     environment: 'jsdom',
