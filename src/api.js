@@ -2,8 +2,9 @@ const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 const USER_KEY = 'agentgateway_user';
 
-async function request(path, { method = 'GET', body, auth = false } = {}) {
+async function request(path, { method = 'GET', body, auth = false, headers: extraHeaders = {} } = {}) {
   const headers = {};
+  Object.assign(headers, extraHeaders);
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (auth) {
     const token = getToken();
@@ -155,6 +156,90 @@ export function listRuns(limit = 50) {
 
 export function getRun(runId) {
   return request(`/v1/runs/${runId}`, { auth: true });
+}
+
+export async function streamRun(runId, onEvent, lastEventId) {
+  let cursor = lastEventId;
+  let reconnects = 0;
+  while (reconnects <= 8) {
+    const headers = {};
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (cursor) headers['Last-Event-ID'] = cursor;
+
+    let response;
+    try {
+      response = await fetch(`${API_BASE}/v1/runs/${encodeURIComponent(runId)}/stream`, { headers });
+    } catch (error) {
+      if (reconnects >= 8) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, Math.min(250 * (2 ** reconnects), 3000)));
+      reconnects += 1;
+      continue;
+    }
+    if (!response.ok) {
+      let detail = `Request failed (${response.status})`;
+      try {
+        const data = await response.json();
+        if (typeof data.detail === 'string') detail = data.detail;
+      } catch { /* Keep the status-based message. */ }
+      throw new Error(detail);
+    }
+    if (!response.body) throw new Error('This browser does not support streaming run updates.');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let event = { type: 'message', data: '' };
+    let terminal = false;
+    const dispatch = () => {
+      if (event.data) {
+        let data;
+        try { data = JSON.parse(event.data); } catch { data = event.data; }
+        if (event.id) cursor = event.id;
+        onEvent({ type: event.type, data, id: event.id });
+        if (event.type === 'run_completed' || event.type === 'run_failed') terminal = true;
+      }
+      event = { type: 'message', data: '' };
+    };
+    const consume = (line) => {
+      if (!line) { dispatch(); return; }
+      if (line.startsWith(':')) return;
+      const separator = line.indexOf(':');
+      const field = separator < 0 ? line : line.slice(0, separator);
+      const valueText = separator < 0 ? '' : line.slice(separator + 1).replace(/^ /, '');
+      if (field === 'event') event.type = valueText;
+      else if (field === 'data') event.data += `${event.data ? '\n' : ''}${valueText}`;
+      else if (field === 'id') event.id = valueText;
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        lines.forEach(consume);
+        if (done) break;
+      }
+      if (buffer) buffer.split(/\r?\n/).forEach(consume);
+      dispatch();
+    } catch (error) {
+      if (reconnects >= 8) throw error;
+    }
+    if (terminal) return;
+    if (reconnects >= 8) throw new Error('Run event stream disconnected before completion.');
+    await new Promise((resolve) => window.setTimeout(resolve, Math.min(250 * (2 ** reconnects), 3000)));
+    reconnects += 1;
+  }
+}
+
+export function runAgent(agentId, input, endUserId, sessionId) {
+  const headers = {};
+  if (endUserId) headers['X-End-User-ID'] = endUserId;
+  if (sessionId) headers['X-Session-ID'] = sessionId;
+  return request(`/v1/agents/${encodeURIComponent(agentId)}/run`, {
+    method: 'POST', auth: true, headers, body: { input },
+  });
 }
 
 export function listCustomTools() {

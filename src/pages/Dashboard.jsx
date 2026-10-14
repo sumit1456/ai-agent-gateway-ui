@@ -26,6 +26,8 @@ import {
   deleteKnowledgeBase,
   createApiKey,
   listApiKeys,
+  runAgent,
+  streamRun,
 } from '../api';
 import { useProviderModels } from '../hooks/useProviderModels';
 import './Dashboard.css';
@@ -204,7 +206,7 @@ function WorkflowsTab() {
       <h3 style={{ marginTop: '2rem' }}>Your workflows</h3>
       {!workflows.length ? <p>No saved workflows yet.</p> : <div className="provider-grid">{workflows.map((workflow) => <article key={workflow.id} className="provider-card">
         <h4>{workflow.name}</h4><p>{workflow.description}</p><small>Version {workflow.version} · {workflow.definition.nodes.length} steps</small>
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}><button className="btn g small" onClick={() => { setEditing(workflow); setJsonDraft(JSON.stringify(workflow.definition, null, 2)); }}>Edit</button><button className="btn g small" onClick={async () => { if (window.confirm('Delete this workflow? Agents using it must be reassigned.')) { try { await deleteWorkflow(workflow.id); await load(); } catch (err) { setNotice({ message: err.message, kind: 'error' }); } } }}>Delete</button></div>
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}><button className="btn g small" onClick={() => { setEditing(workflow); setJsonDraft(JSON.stringify(workflow.definition, null, 2)); }}>Edit</button><button className="btn g small" onClick={async () => { if (window.confirm('Delete this workflow? Agents currently using it will be reassigned to your Dynamic default workflow. Existing run history and its workflow snapshot will be kept.')) { try { const result = await deleteWorkflow(workflow.id); await load(); setNotice({ kind: 'success', message: result.agents_reassigned ? `${result.agents_reassigned} agent(s) reassigned to ${result.default_workflow_name}. Run history was preserved.` : 'Workflow deleted. Run history was preserved.' }); } catch (err) { setNotice({ message: err.message, kind: 'error' }); } } }}>Delete</button></div>
       </article>)}</div>}
     </>}
   </>;
@@ -1470,6 +1472,7 @@ function AgentsTab() {
                     <span className="provider-badge ok">Provider: {providerName}</span>
                   </div>
                 </div>
+                <div className="agent-id-row"><strong>Agent ID</strong><code>{agent.id}</code><button className="btn g small" type="button" onClick={() => navigator.clipboard.writeText(agent.id)}>Copy</button></div>
                 {models && (
                   <div style={{ fontSize: '0.8rem', opacity: 0.85, width: '100%', display: 'flex', flexDirection: 'column', gap: '0.2rem', margin: '0.5rem 0' }}>
                     <div><strong>Planner:</strong> {models.planner}</div>
@@ -1503,6 +1506,123 @@ function AgentsTab() {
       )}
     </>
   );
+}
+
+const INTEGRATION_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+
+function IntegrationTab() {
+  const [agents, setAgents] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [template, setTemplate] = useState('react');
+  const [endUserId, setEndUserId] = useState('demo-user-123');
+  const [sessionId, setSessionId] = useState('demo-conversation-123');
+  const [prompt, setPrompt] = useState('What can you help me with?');
+  const [loadingAgents, setLoadingAgents] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [runOutput, setRunOutput] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    listAgents().then((rows) => {
+      setAgents(rows || []);
+      setSelectedId(rows?.[0]?.id || '');
+    }).catch((err) => setError(err.message)).finally(() => setLoadingAgents(false));
+  }, []);
+
+  const examples = {
+    react: `// React component: call YOUR backend, never the gateway token from the browser.\nimport { useState } from 'react';\n\nexport function AgentChat() {\n  const [answer, setAnswer] = useState('');\n  const [busy, setBusy] = useState(false);\n\n  async function send(message) {\n    setBusy(true);\n    try {\n      // Your backend authenticates the signed-in user and supplies their trusted ID.\n      const response = await fetch('/api/agent-chat', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ message, sessionId: 'conversation-123' }),\n        credentials: 'include',\n      });\n      const data = await response.json();\n      if (!response.ok) throw new Error(data.error || 'Request failed');\n      setAnswer(data.answer);\n    } finally { setBusy(false); }\n  }\n\n  return <section>\n    <button disabled={busy} onClick={() => send('Hello!')}>Ask agent</button>\n    <p>{answer}</p>\n  </section>;\n}`,
+    node: `// Node.js / Express backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport express from 'express';\n\nconst app = express();\napp.use(express.json());\napp.post('/api/agent-chat', requireYourUserAuth, async (req, res) => {\n  const userId = req.user.id; // Set by your verified authentication middleware\n  const gateway = await fetch('${INTEGRATION_BASE_URL}/v1/agents/${selectedId || '<AGENT_ID>'}/run', {\n    method: 'POST',\n    headers: {\n      Authorization: \`Bearer \${process.env.AGENT_GATEWAY_TOKEN}\`,\n      'Content-Type': 'application/json',\n      'X-End-User-ID': String(userId),\n      'X-Session-ID': req.body.sessionId, // optional; reuse to continue a conversation\n    },\n    body: JSON.stringify({ input: req.body.message }),\n  });\n  const run = await gateway.json();\n  if (!gateway.ok) return res.status(gateway.status).json({ error: run.detail || 'Gateway request failed' });\n  // Poll GET /v1/runs/{run_id} with the same bearer token until status is complete.\n  res.json({ runId: run.run_id, sessionId: run.session_id, status: run.status });\n});`,
+    python: `# Python / FastAPI backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport os\nimport httpx\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\nGATEWAY = '${INTEGRATION_BASE_URL}'\nAGENT_ID = '${selectedId || '<AGENT_ID>'}'\n\n@app.post('/api/agent-chat')\nasync def agent_chat(body: dict, user=Depends(require_your_user_auth)):\n    # user.id comes from your verified authentication middleware.\n    async with httpx.AsyncClient() as client:\n        response = await client.post(\n            f'{GATEWAY}/v1/agents/{AGENT_ID}/run',\n            headers={\n                'Authorization': f"Bearer {os.environ['AGENT_GATEWAY_TOKEN']}",\n                'X-End-User-ID': str(user.id),\n                'X-Session-ID': body.get('sessionId', ''),\n            },\n            json={'input': body['message']},\n        )\n        response.raise_for_status()\n        return response.json() # poll /v1/runs/{run_id} for the finished answer\n`,
+  };
+
+  async function execute() {
+    if (!selectedId || !prompt.trim()) return;
+    setRunning(true); setError(''); setRunOutput('Starting run…');
+    try {
+      const started = await runAgent(selectedId, prompt, endUserId.trim(), sessionId.trim());
+      const steps = [];
+      let terminal = null;
+      const showProgress = () => setRunOutput(JSON.stringify({
+        run_id: started.run_id,
+        session_id: started.session_id,
+        status: terminal?.status || 'running',
+        steps,
+        result: terminal?.result,
+      }, null, 2));
+      setRunOutput(JSON.stringify({ run_id: started.run_id, session_id: started.session_id, status: 'running', steps }, null, 2));
+      try {
+        await streamRun(started.run_id, ({ type, data }) => {
+          if (type === 'workflow_step_started') {
+            steps.push({ node_id: data.node_id, name: data.name, role: data.role, attempt: data.attempt, status: 'running' });
+            showProgress();
+          } else if (type === 'workflow_step_completed' || type === 'workflow_step_failed') {
+            const step = [...steps].reverse().find((item) => item.node_id === data.node_id && item.status === 'running');
+            if (step) {
+              step.status = type === 'workflow_step_completed' ? 'succeeded' : 'failed';
+              if (type === 'workflow_step_completed') step.output = data.output;
+              else step.error = data.error;
+            }
+            showProgress();
+          } else if (type === 'run_completed' || type === 'run_failed') {
+            terminal = { status: data.status || (type === 'run_completed' ? 'done' : 'failed'), result: data.result || data.output };
+            showProgress();
+          }
+        });
+      } catch (streamError) {
+        // Retain the existing polling path when Redis/SSE is unavailable.
+        setRunOutput(JSON.stringify({ run_id: started.run_id, status: 'running', stream_notice: streamError.message, steps }, null, 2));
+      }
+      if (!terminal) {
+        let latest;
+        for (let attempt = 0; attempt < 90; attempt += 1) {
+          await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          latest = await getRun(started.run_id);
+          if (['done', 'failed', 'cancelled'].includes(latest.status)) break;
+        }
+        terminal = { status: latest?.status || 'still_running', result: latest?.result };
+        setRunOutput(JSON.stringify({ run_id: started.run_id, session_id: started.session_id, ...terminal, steps, error: latest?.error_message }, null, 2));
+      }
+    } catch (err) { setError(err.message); setRunOutput(''); }
+    finally { setRunning(false); }
+  }
+
+  async function copyExample() {
+    try { await navigator.clipboard.writeText(examples[template]); setCopied(true); window.setTimeout(() => setCopied(false), 1600); }
+    catch { setError('Could not copy the example.'); }
+  }
+
+  return <div className="integration-page">
+    <section className="integration-intro">
+      <p className="field-hint">Connect your app to an agent with these starter examples, then try a request in the playground.</p>
+      <div className="integration-warning"><strong>Protect your gateway token.</strong> Use it only on your server, stored in an environment variable. Never put it in React/browser code. Authenticate each end user in your own backend and derive <code>X-End-User-ID</code> from that verified identity; do not trust an ID sent by the browser.</div>
+    </section>
+
+    <section className="integration-panel">
+      <h3>Your agents</h3>
+      {loadingAgents ? <p className="field-hint">Loading agents…</p> : agents.length ? <div className="integration-agent-list">{agents.map((agent) => <div className="integration-agent" key={agent.id}><div><strong>{agent.name}</strong><code>{agent.id}</code></div><button className="btn g small" onClick={() => { setSelectedId(agent.id); navigator.clipboard.writeText(agent.id); }}>Use ID</button></div>)}</div> : <p className="field-hint">No agents found. Create an agent first in the Agents section.</p>}
+    </section>
+
+    <section className="integration-panel">
+      <h3>Integration templates</h3>
+      <div className="integration-meta"><span><strong>Gateway URL</strong><code>{INTEGRATION_BASE_URL}</code></span><span><strong>Selected agent</strong><code>{selectedId || 'Select an agent above'}</code></span></div>
+      <div className="integration-template-tabs">{[['react', 'React UI'], ['node', 'Node.js backend'], ['python', 'Python backend']].map(([id, label]) => <button key={id} className={`btn ${template === id ? 'p' : 'g'}`} onClick={() => setTemplate(id)}>{label}</button>)}</div>
+      <pre className="integration-code"><code>{examples[template]}</code></pre>
+      <button className="btn g" onClick={copyExample}>{copied ? 'Copied' : 'Copy example'}</button>
+      <p className="field-hint">The browser example calls your app backend. Your backend authenticates the user, then adds the gateway token and trusted end-user ID.</p>
+    </section>
+
+    <section className="integration-panel">
+      <h3>Try an agent</h3>
+      <p className="field-hint">This playground sends requests as your signed-in gateway account. End-user ID here is for testing; production apps should set it server-side from authenticated identity.</p>
+      <label className="field-label">Agent</label><select className="default-select" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} — {agent.id}</option>)}</select>
+      <div className="integration-form-grid"><div><label className="field-label">Test end-user ID</label><input className="key-input" value={endUserId} onChange={(event) => setEndUserId(event.target.value)} /></div><div><label className="field-label">Session ID (reuse to continue)</label><input className="key-input" value={sessionId} onChange={(event) => setSessionId(event.target.value)} /></div></div>
+      <label className="field-label">Message</label><textarea className="key-input" rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+      <button className="btn p" disabled={running || !selectedId || !prompt.trim()} onClick={execute}>{running ? 'Running…' : 'Run agent'}</button>
+      {error && <div className="tab-notice error">{error}</div>}
+      {runOutput && <pre className="integration-code"><code>{runOutput}</code></pre>}
+    </section>
+  </div>;
 }
 
 function KnowledgeTab() {
@@ -2127,6 +2247,12 @@ export default function Dashboard({ loggedIn, user, onLogout }) {
               Agents
             </button>
             <button
+              className={`nav-item ${activeTab === 'integration' ? 'active' : ''}`}
+              onClick={() => setActiveTab('integration')}
+            >
+              Integration Guide
+            </button>
+            <button
               className={`nav-item ${activeTab === 'workflows' ? 'active' : ''}`}
               onClick={() => setActiveTab('workflows')}
             >
@@ -2174,7 +2300,7 @@ export default function Dashboard({ loggedIn, user, onLogout }) {
         {/* Main Content */}
         <main className="main-content">
           <header className="main-header">
-            <h2>{activeTab === 'knowledge' ? 'Knowledge Bases' : activeTab === 'api-keys' ? 'API Keys' : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h2>
+            <h2>{activeTab === 'knowledge' ? 'Knowledge Bases' : activeTab === 'api-keys' ? 'API Keys' : activeTab === 'integration' ? 'Integration Guide' : activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h2>
           </header>
 
           <div className="content-area">
@@ -2182,6 +2308,8 @@ export default function Dashboard({ loggedIn, user, onLogout }) {
               <ProvidersTab />
             ) : activeTab === 'agents' ? (
               <AgentsTab />
+            ) : activeTab === 'integration' ? (
+              <IntegrationTab />
             ) : activeTab === 'workflows' ? (
               <WorkflowsTab />
             ) : activeTab === 'runs' ? (

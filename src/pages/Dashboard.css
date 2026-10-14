@@ -494,3 +494,81 @@
   font-size: 13.5px;
   color: #7ee2a8;
 }
+
+.agent-id-row,
+.integration-meta,
+.integration-agent,
+.integration-agent > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-id-row {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.agent-id-row code,
+.integration-meta code,
+.integration-agent code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.agent-id-row code { flex: 1; }
+.agent-id-row .btn { flex: 0 0 auto; }
+
+.integration-page { display: grid; gap: 18px; max-width: 1050px; }
+.integration-panel {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.integration-panel h3 { margin: 0 0 12px; }
+.integration-warning {
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  border-radius: 10px;
+  background: rgba(255, 193, 7, 0.08);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.integration-warning code { color: #ffd28a; }
+.integration-agent-list { display: grid; gap: 8px; }
+.integration-agent {
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.integration-agent > div { min-width: 0; flex-wrap: wrap; }
+.integration-meta { flex-wrap: wrap; margin: 12px 0; }
+.integration-meta span { display: flex; flex-direction: column; gap: 5px; min-width: 240px; }
+.integration-template-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 10px; }
+.integration-code {
+  max-height: 430px;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--fg);
+  font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+}
+.integration-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0; }
+.integration-panel .field-hint { display: block; margin: 10px 0; }
+.integration-panel .default-select, .integration-panel .key-input { margin-bottom: 10px; }
+
+@media (max-width: 700px) {
+  .integration-form-grid { grid-template-columns: 1fr; }
+  .integration-panel { padding: 15px; }
+  .agent-id-row { flex-wrap: wrap; }
+}
