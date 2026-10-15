@@ -65,35 +65,6 @@ export function listApiKeys() {
   return request('/auth/api-keys', { auth: true });
 }
 
-/* ---- Result webhooks ---- */
-export function getWebhook() {
-  return request('/v1/webhooks', { auth: true });
-}
-
-export function saveWebhook(url) {
-  return request('/v1/webhooks', { method: 'PUT', auth: true, body: { url } });
-}
-
-export function rotateWebhookSecret() {
-  return request('/v1/webhooks/rotate-secret', { method: 'POST', auth: true });
-}
-
-export function testWebhook() {
-  return request('/v1/webhooks/test', { method: 'POST', auth: true });
-}
-
-export function deleteWebhook() {
-  return request('/v1/webhooks', { method: 'DELETE', auth: true });
-}
-
-export function listWebhookDeliveries(limit = 20) {
-  return request(`/v1/webhooks/deliveries?limit=${limit}`, { auth: true });
-}
-
-export function retryWebhookDelivery(deliveryId) {
-  return request(`/v1/webhooks/deliveries/${encodeURIComponent(deliveryId)}/retry`, { method: 'POST', auth: true });
-}
-
 /* ---- Providers ---- */
 
 export function listProviderCatalog() {
