@@ -20,6 +20,7 @@ import {
   getRun,
   listCustomTools,
   createCustomTool,
+  updateCustomTool,
   deleteCustomTool,
   listBuiltinTools,
   listKnowledgeBases,
@@ -71,6 +72,7 @@ function WorkflowsTab() {
   const [presets, setPresets] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [availableTools, setAvailableTools] = useState([]);
+  const [defaultPrompts, setDefaultPrompts] = useState({});
   const [editing, setEditing] = useState(null);
   const [advanced, setAdvanced] = useState(false);
   const [jsonDraft, setJsonDraft] = useState('');
@@ -84,7 +86,15 @@ function WorkflowsTab() {
       const [presetRows, workflowRows, customTools, builtinTools] = await Promise.all([listWorkflowPresets(), listWorkflows(), listCustomTools(), listBuiltinTools()]);
       setPresets(presetRows);
       setWorkflows(workflowRows);
-      setAvailableTools([...builtinTools.builtin_tools.map((tool) => tool.name), ...customTools.map((tool) => tool.name)]);
+      setAvailableTools([
+        ...builtinTools.builtin_tools.filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
+        ...customTools.map((tool) => tool.name),
+      ]);
+      try {
+        const promptResponse = await fetch(`${import.meta.env.VITE_API_URL || ''}/v1/agents/default-prompts`.replace(/\/$/, ''));
+        const promptData = await promptResponse.json();
+        setDefaultPrompts(promptData.default_prompts || {});
+      } catch { setDefaultPrompts({}); }
     } catch (err) {
       setNotice({ message: err.message, kind: 'error' });
     } finally { setLoading(false); }
@@ -94,7 +104,7 @@ function WorkflowsTab() {
   function startCustom() {
     const definition = {
       schema_version: 1, start_node: 'step_1',
-      nodes: [workflowNode('step_1', 'Step 1', 'executor')], edges: [],
+      nodes: [{ ...workflowNode('step_1', 'Step 1', 'executor'), tools: availableTools.filter((name) => name !== 'semantic_search') }], edges: [],
       limits: { max_steps: 20, max_retries_per_step: 1 },
     };
     setEditing({ name: 'My workflow', description: '', definition });
@@ -118,7 +128,7 @@ function WorkflowsTab() {
   function addStep() {
     const nodes = [...editing.definition.nodes];
     const id = `step_${Date.now()}`;
-    const newNode = workflowNode(id, `Step ${nodes.length + 1}`, 'executor');
+    const newNode = { ...workflowNode(id, `Step ${nodes.length + 1}`, 'executor'), tools: availableTools.filter((name) => name !== 'semantic_search') };
     const edges = [...editing.definition.edges];
     const terminal = nodes.find((node) => !edges.some((edge) => edge.from === node.id));
     if (terminal) edges.push({ from: terminal.id, to: id });
@@ -178,11 +188,12 @@ function WorkflowsTab() {
             </div>
             <label className="field-label" style={{ marginTop: '0.75rem' }}>Instructions for this step</label>
             <textarea className="key-input" rows={3} value={node.instructions || ''} onChange={(e) => updateNode(index, { instructions: e.target.value })} />
+            <details style={{ marginTop: '0.4rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Built-in {node.role} system prompt</summary><pre className="field-hint" style={{ whiteSpace: 'pre-wrap' }}>{defaultPrompts[node.role]?.prompt || 'Role prompt loads at runtime.'}</pre></details>
             <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts</label><input className="key-input" type="number" min="1" max="3" value={node.max_attempts || 1} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
             <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
               <JsonObjectField label="Input mapping (JSON)" value={node.input_mapping} onChange={(input_mapping) => updateNode(index, { input_mapping })} rows={2} />
               <JsonObjectField label="Output keys and expected types (JSON)" value={node.output_schema} onChange={(output_schema) => updateNode(index, { output_schema })} rows={2} />
-              <label className="field-label">Tools this step may call (comma-separated)</label><input className="key-input" value={(node.tools || []).join(', ')} onChange={(e) => updateNode(index, { tools: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} placeholder="e.g. semantic_search, get_conversation_history" />
+              <label className="field-label">Tools this step may call</label><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem' }}>{availableTools.map((tool) => <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><input type="checkbox" checked={(node.tools || []).includes(tool)} onChange={(event) => updateNode(index, { tools: event.target.checked ? [...new Set([...(node.tools || []), tool])] : (node.tools || []).filter((name) => name !== tool) })} />{tool}</label>)}</div>
               <span className="field-hint">Use $.request, $.variables, or $.steps.&lt;step-id&gt;.output.&lt;key&gt; to pass earlier results. Available tools: {availableTools.join(', ') || 'none configured'}.</span>
             </details>
           </section>)}
@@ -752,6 +763,7 @@ function AgentsTab() {
   const [workflows, setWorkflows] = useState([]);
   const [providers, setProviders] = useState([]);
   const [knowledgeBases, setKnowledgeBases] = useState([]);
+  const [availableAgentTools, setAvailableAgentTools] = useState([]);
   const [status, setStatus] = useState('loading');
   const [isCreating, setIsCreating] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
@@ -776,6 +788,7 @@ function AgentsTab() {
     controller_prompt: '',
     role_prompt_presets: {},
     role_instructions: {},
+    tools: [],
   });
   const selectedProvider = providers.find((p) => p.id === formData.provider_id);
   const providerModelsQuery = useProviderModels(selectedProvider?.provider_id, {
@@ -794,6 +807,8 @@ function AgentsTab() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [defaultPrompts, setDefaultPrompts] = useState(null);
   const [rolePresets, setRolePresets] = useState({});
+  const selectedWorkflow = workflows.find((workflow) => workflow.version_id === formData.workflow_version_id);
+  const workflowRoles = new Set((selectedWorkflow?.definition?.nodes || []).map((node) => node.role));
 
   useEffect(() => {
     if (!selectedProvider || !providerModels.length) return;
@@ -813,16 +828,22 @@ function AgentsTab() {
     }
     setStatus('loading');
     try {
-      const [agentsData, providersData, kbData, workflowData] = await Promise.all([
+      const [agentsData, providersData, kbData, workflowData, customTools, builtinTools] = await Promise.all([
         listAgents(),
         listConfiguredProviders(),
         listKnowledgeBases(),
         listWorkflows(),
+        listCustomTools(),
+        listBuiltinTools(),
       ]);
       setAgents(agentsData);
       setProviders(providersData);
       setKnowledgeBases(kbData || []);
       setWorkflows(workflowData || []);
+      setAvailableAgentTools([
+        ...(builtinTools.builtin_tools || []).filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
+        ...(customTools || []).map((tool) => tool.name),
+      ]);
       setStatus('ready');
     } catch (err) {
       console.error(err);
@@ -884,6 +905,7 @@ function AgentsTab() {
       controller_prompt: config.controller_prompt || '',
       role_prompt_presets: config.role_prompt_presets || {},
       role_instructions: config.role_instructions || {},
+      tools: config.tools?.length ? config.tools : availableAgentTools,
     });
     setShowAdvanced(Boolean(agent && [
       config.router_prompt, config.planner_prompt, config.executor_prompt,
@@ -932,6 +954,7 @@ function AgentsTab() {
         controller_prompt: formData.controller_prompt || null,
         role_prompt_presets: formData.role_prompt_presets || {},
         role_instructions: formData.role_instructions || {},
+        tools: formData.tools || [],
       };
       if (editingAgent) await updateAgent(editingAgent.id, payload);
       else await createAgent(payload);
@@ -949,6 +972,7 @@ function AgentsTab() {
         system_prompt: 'You are a helpful assistant.',
         role_prompt_presets: {},
         role_instructions: {},
+        tools: availableAgentTools,
       });
       flash(editingAgent ? 'Agent updated successfully!' : 'Agent created successfully!');
       load();
@@ -1143,6 +1167,14 @@ function AgentsTab() {
             />
           </div>
 
+          <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Registered tools enabled for this agent</label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem' }}>
+              {availableAgentTools.map((tool) => <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><input type="checkbox" checked={(formData.tools || []).includes(tool)} onChange={(event) => setFormData((prev) => ({ ...prev, tools: event.target.checked ? [...new Set([...(prev.tools || []), tool])] : (prev.tools || []).filter((name) => name !== tool) }))} />{tool}</label>)}
+            </div>
+            <span className="field-hint">The agent enables these tools; each workflow step can call only the tools assigned to that step.</span>
+          </div>
+
           <div style={{ marginBottom: '1rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '8px', padding: '1rem' }}>
             <label className="field-label">How workflow roles are used</label>
             <div style={{ fontSize: '0.85rem', color: '#555', lineHeight: 1.55, margin: '0.35rem 0 1rem' }}>
@@ -1155,7 +1187,7 @@ function AgentsTab() {
               Choose a behavior preset and add optional guidance for roles used by this agent’s workflow. Add or remove workflow steps in the Workflows section.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-              {AGENT_PROMPT_ROLES.map(([role, label, description]) => {
+              {AGENT_PROMPT_ROLES.filter(([role]) => workflowRoles.has(role)).map(([role, label, description]) => {
                 const presets = rolePresets[role] || [
                   { id: 'balanced', name: 'Balanced', description: 'Use the built-in role behavior.' },
                 ];
@@ -1535,8 +1567,8 @@ function IntegrationTab() {
 
   const examples = {
     react: `// React component: call YOUR backend, never the gateway token from the browser.\nimport { useState } from 'react';\n\nexport function AgentChat() {\n  const [answer, setAnswer] = useState('');\n  const [busy, setBusy] = useState(false);\n\n  async function send(message) {\n    setBusy(true);\n    try {\n      // Your backend authenticates the signed-in user and supplies their trusted ID.\n      const response = await fetch('/api/agent-chat', {\n        method: 'POST',\n        headers: { 'Content-Type': 'application/json' },\n        body: JSON.stringify({ message, sessionId: 'conversation-123' }),\n        credentials: 'include',\n      });\n      const data = await response.json();\n      if (!response.ok) throw new Error(data.error || 'Request failed');\n      setAnswer('Run started: ' + data.runId + '. Read progress and the result from the authenticated event stream.');\n    } finally { setBusy(false); }\n  }\n\n  return <section>\n    <button disabled={busy} onClick={() => send('Hello!')}>Ask agent</button>\n    <p>{answer}</p>\n  </section>;\n}`,
-    node: `// Node.js / Express backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport express from 'express';\n\nconst app = express();\napp.use(express.json());\napp.post('/api/agent-chat', requireYourUserAuth, async (req, res) => {\n  const userId = req.user.id; // Set by your verified authentication middleware\n  const gateway = await fetch('${INTEGRATION_BASE_URL}/v1/agents/${selectedId || '<AGENT_ID>'}/run', {\n    method: 'POST',\n    headers: {\n      Authorization: \`Bearer \${process.env.AGENT_GATEWAY_TOKEN}\`,\n      'Content-Type': 'application/json',\n      'X-End-User-ID': String(userId),\n      'X-Session-ID': req.body.sessionId, // optional; reuse to continue a conversation\n    },\n    body: JSON.stringify({ input: req.body.message }),\n  });\n  const run = await gateway.json();\n  if (!gateway.ok) return res.status(gateway.status).json({ error: run.detail || 'Gateway request failed' });\n  // Read /v1/runs/{run_id}/stream with the same bearer token to receive progress and the result.\n  res.status(202).json({ runId: run.run_id, sessionId: run.session_id, status: run.status });\n});`,
-    python: `# Python / FastAPI backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport os\nimport httpx\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\nGATEWAY = '${INTEGRATION_BASE_URL}'\nAGENT_ID = '${selectedId || '<AGENT_ID>'}'\n\n@app.post('/api/agent-chat')\nasync def agent_chat(body: dict, user=Depends(require_your_user_auth)):\n    # user.id comes from your verified authentication middleware.\n    async with httpx.AsyncClient() as client:\n        response = await client.post(\n            f'{GATEWAY}/v1/agents/{AGENT_ID}/run',\n            headers={\n                'Authorization': f"Bearer {os.environ['AGENT_GATEWAY_TOKEN']}",\n                'X-End-User-ID': str(user.id),\n                'X-Session-ID': body.get('sessionId', ''),\n            },\n            json={'input': body['message']},\n        )\n        response.raise_for_status()\n        return response.json() # use run_id to subscribe to /v1/runs/{run_id}/stream with the same token\n`,
+    node: `// Node.js / Express backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport express from 'express';\n\nconst app = express();\napp.use(express.json());\napp.post('/api/agent-chat', requireYourUserAuth, async (req, res) => {\n  const userId = req.user.id; // Set by your verified authentication middleware\n  const gateway = await fetch('${INTEGRATION_BASE_URL}/v1/agents/${selectedId || '<AGENT_ID>'}/run', {\n    method: 'POST',\n    headers: {\n      Authorization: \`Bearer \${process.env.AGENT_GATEWAY_TOKEN}\`,\n      'Content-Type': 'application/json',\n      'X-End-User-ID': String(userId),\n      // session ID is passed in the JSON body below\n    },\n    body: JSON.stringify({ input: req.body, external_session_id: req.body.sessionId }),\n  });\n  const run = await gateway.json();\n  if (!gateway.ok) return res.status(gateway.status).json({ error: run.detail || 'Gateway request failed' });\n  // Read /v1/runs/{run_id}/stream with the same bearer token to receive progress and the result.\n  res.status(202).json({ runId: run.run_id, sessionId: run.session_id, status: run.status });\n});`,
+    python: `# Python / FastAPI backend. Keep AGENT_GATEWAY_TOKEN in server environment.\nimport os\nimport httpx\nfrom fastapi import FastAPI, Depends\n\napp = FastAPI()\nGATEWAY = '${INTEGRATION_BASE_URL}'\nAGENT_ID = '${selectedId || '<AGENT_ID>'}'\n\n@app.post('/api/agent-chat')\nasync def agent_chat(body: dict, user=Depends(require_your_user_auth)):\n    # user.id comes from your verified authentication middleware.\n    async with httpx.AsyncClient() as client:\n        response = await client.post(\n            f'{GATEWAY}/v1/agents/{AGENT_ID}/run',\n            headers={\n                'Authorization': f"Bearer {os.environ['AGENT_GATEWAY_TOKEN']}",\n                'X-End-User-ID': str(user.id),\n                # session ID is passed in the JSON body below\n            },\n            json={'input': body, 'external_session_id': body.get('sessionId')},\n        )\n        response.raise_for_status()\n        return response.json() # use run_id to subscribe to /v1/runs/{run_id}/stream with the same token\n`,
   };
 
   async function execute() {
@@ -1617,6 +1649,9 @@ function IntegrationTab() {
 
     <section className="integration-panel">
       <h3>Integration templates</h3>
+      <p className="field-hint">Send the caller's complete data as an object in <code>input</code>. The gateway also accepts a plain string when that is all you have. Keep identity and conversation metadata at the request level: derive <code>X-End-User-ID</code> on your server from the authenticated user, and send the same <code>external_session_id</code> on every turn in that conversation. Do not trust an end-user ID supplied by the browser.</p>
+      <pre className="integration-code"><code>{'{ "input": { "message": "Summarize this document", "documentId": "doc-456", "sessionId": "conversation-789" }, "external_session_id": "conversation-789", "variables": { "locale": "en" } }'}</code></pre>
+      <p className="field-hint"><code>input</code> is the request data the workflow receives. <code>external_session_id</code> links turns to conversation history; <code>X-End-User-ID</code> scopes that session to the verified end user. <code>variables</code> is optional agent template/context data. Reuse the same end-user and session IDs across turns. If you omit the session ID, the gateway uses its default session for that agent and end user; supply different session IDs for separate conversations.</p>
       <div className="integration-meta"><span><strong>Gateway URL</strong><code>{INTEGRATION_BASE_URL}</code></span><span><strong>Selected agent</strong><code>{selectedId || 'Select an agent above'}</code></span></div>
       <div className="integration-template-tabs">{[['react', 'React UI'], ['node', 'Node.js backend'], ['python', 'Python backend']].map(([id, label]) => <button key={id} className={`btn ${template === id ? 'p' : 'g'}`} onClick={() => setTemplate(id)}>{label}</button>)}</div>
       <pre className="integration-code"><code>{examples[template]}</code></pre>
@@ -1642,6 +1677,7 @@ function ToolsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [editingTool, setEditingTool] = useState(null);
   const [notice, setNotice] = useState(null);
   const [form, setForm] = useState({
     name: '', description: '', endpoint_url: '',
@@ -1669,17 +1705,30 @@ function ToolsTab() {
     setSaving(true);
     setNotice(null);
     try {
-      await createCustomTool({
+      const payload = {
         name: form.name.trim(), description: form.description.trim(), kind: 'webhook',
         endpoint_url: form.endpoint_url.trim(),
         timeout_ms: Number(form.timeout_ms) || 10000, input_schema: inputSchema,
-      });
+      };
+      if (editingTool) await updateCustomTool(editingTool.id, payload);
+      else await createCustomTool(payload);
       setForm({ name: '', description: '', endpoint_url: '', timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}' });
       setShowForm(false);
-      setNotice({ kind: 'success', message: 'Tool registered.' });
+      setEditingTool(null);
+      setNotice({ kind: 'success', message: editingTool ? 'Tool updated.' : 'Tool registered.' });
       await load();
     } catch (err) { setNotice({ kind: 'error', message: err.message }); }
     finally { setSaving(false); }
+  }
+
+  function edit(tool) {
+    setEditingTool(tool);
+    setForm({
+      name: tool.name, description: tool.description || '', endpoint_url: tool.endpoint_url || '',
+      timeout_ms: tool.timeout_ms || 10000,
+      input_schema: JSON.stringify(tool.input_schema || { type: 'object', properties: {} }, null, 2),
+    });
+    setShowForm(true);
   }
 
   async function remove(tool) {
@@ -1695,7 +1744,7 @@ function ToolsTab() {
     {notice && <div className={`tab-notice ${notice.kind}`} role="status">{notice.message}</div>}
     <section className="tools-panel">
       <div className="tools-panel-header"><div><h3>Custom tools</h3><p className="field-hint">Webhook tools send the agent’s arguments to your endpoint as a JSON POST.</p></div>
-        <button className="btn p" onClick={() => setShowForm((visible) => !visible)}>{showForm ? 'Cancel' : 'Register Tool'}</button>
+        <button className="btn p" onClick={() => { setShowForm((visible) => !visible); setEditingTool(null); }}>{showForm ? 'Cancel' : 'Register Tool'}</button>
       </div>
       {showForm && <form onSubmit={register} className="tools-form">
         <div><label className="field-label">Tool name</label><input className="key-input" required pattern="[A-Za-z0-9_]+" title="Use letters, numbers, and underscores." value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="get_layout" /></div>
@@ -1704,9 +1753,9 @@ function ToolsTab() {
         <div className="tools-form-full"><label className="field-label">Endpoint URL</label><input className="key-input" type="url" required value={form.endpoint_url} onChange={(e) => setForm({ ...form, endpoint_url: e.target.value })} placeholder="https://pdf-editor-backend.com/tool/get_layout" /></div>
         <div><label className="field-label">Timeout (milliseconds)</label><input className="key-input" type="number" min="1" max="120000" value={form.timeout_ms} onChange={(e) => setForm({ ...form, timeout_ms: e.target.value })} /></div>
         <div className="tools-form-full"><label className="field-label">Input schema (JSON Schema)</label><textarea className="key-input" rows={8} value={form.input_schema} onChange={(e) => setForm({ ...form, input_schema: e.target.value })} spellCheck="false" /><span className="field-hint">Define properties and required fields here. These fields tell the agent which arguments it can send.</span></div>
-        <div className="tools-form-full"><button className="btn p" type="submit" disabled={saving}>{saving ? 'Registering…' : 'Save Tool'}</button></div>
+        <div className="tools-form-full"><button className="btn p" type="submit" disabled={saving}>{saving ? 'Saving…' : editingTool ? 'Update Tool' : 'Save Tool'}</button></div>
       </form>}
-      {loading ? <p>Loading tools…</p> : tools.length === 0 ? <p>No custom tools registered yet.</p> : <div className="tools-list">{tools.map((tool) => <div className="tools-list-item" key={tool.id}><div><strong>{tool.name}</strong><div className="tools-kind">{tool.kind}</div></div><div>{tool.description}</div><div>{tool.endpoint_url || 'Client executed'}</div><button className="btn danger" onClick={() => remove(tool)}>Delete</button></div>)}</div>}
+      {loading ? <p>Loading tools…</p> : tools.length === 0 ? <p>No custom tools registered yet.</p> : <div className="tools-list">{tools.map((tool) => <div className="tools-list-item" key={tool.id}><div><strong>{tool.name}</strong><div className="tools-kind">{tool.kind}</div></div><div>{tool.description}</div><div>{tool.endpoint_url || 'Client executed'}</div><button className="btn g" onClick={() => edit(tool)}>Edit</button><button className="btn danger" onClick={() => remove(tool)}>Delete</button></div>)}</div>}
     </section>
   </div>;
 }

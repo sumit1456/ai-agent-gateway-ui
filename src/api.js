@@ -259,6 +259,19 @@ export function createCustomTool(payload) {
   });
 }
 
+export function updateCustomTool(toolId, payload) {
+  const query = new URLSearchParams({
+    name: payload.name,
+    description: payload.description,
+    endpoint_url: payload.endpoint_url,
+    timeout_ms: String(payload.timeout_ms),
+  });
+  if (payload.auth_token) query.set('auth_token', payload.auth_token);
+  return request(`/v1/tools/${encodeURIComponent(toolId)}?${query.toString()}`, {
+    method: 'PUT', auth: true, body: payload.input_schema || {},
+  });
+}
+
 export function deleteCustomTool(toolId) {
   return request(`/v1/tools/${encodeURIComponent(toolId)}`, { method: 'DELETE', auth: true });
 }
