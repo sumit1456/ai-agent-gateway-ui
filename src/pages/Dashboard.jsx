@@ -72,6 +72,8 @@ function WorkflowsTab() {
   const [presets, setPresets] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [availableTools, setAvailableTools] = useState([]);
+  const [toolDrafts, setToolDrafts] = useState({});
+  const [toolErrors, setToolErrors] = useState({});
   const [defaultPrompts, setDefaultPrompts] = useState({});
   const [editing, setEditing] = useState(null);
   const [advanced, setAdvanced] = useState(false);
@@ -86,17 +88,20 @@ function WorkflowsTab() {
       const [presetRows, workflowRows, customTools, builtinTools] = await Promise.all([listWorkflowPresets(), listWorkflows(), listCustomTools(), listBuiltinTools()]);
       setPresets(presetRows);
       setWorkflows(workflowRows);
-      setAvailableTools([
+      const registeredTools = [
         ...builtinTools.builtin_tools.filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
         ...customTools.map((tool) => tool.name),
-      ]);
+      ];
+      setAvailableTools(registeredTools);
       try {
         const promptResponse = await fetch(`${import.meta.env.VITE_API_URL || ''}/v1/agents/default-prompts`.replace(/\/$/, ''));
         const promptData = await promptResponse.json();
         setDefaultPrompts(promptData.default_prompts || {});
       } catch { setDefaultPrompts({}); }
+      return registeredTools;
     } catch (err) {
       setNotice({ message: err.message, kind: 'error' });
+      return [];
     } finally { setLoading(false); }
   }
   useEffect(() => { load(); }, []);
@@ -114,9 +119,16 @@ function WorkflowsTab() {
   async function choosePreset(preset) {
     try {
       const workflow = await createWorkflowFromPreset(preset.id);
-      await load();
-      setEditing(workflow);
-      setJsonDraft(JSON.stringify(workflow.definition, null, 2));
+      const registeredTools = await load();
+      const definition = {
+        ...workflow.definition,
+        nodes: workflow.definition.nodes.map((node) => ['executor', 'direct'].includes(node.role)
+          ? { ...node, tools: [...new Set([...(node.tools || []), ...registeredTools])] }
+          : node),
+      };
+      const editableWorkflow = { ...workflow, definition };
+      setEditing(editableWorkflow);
+      setJsonDraft(JSON.stringify(definition, null, 2));
     } catch (err) { setNotice({ message: err.message, kind: 'error' }); }
   }
   function updateNode(index, patch) {
@@ -124,6 +136,18 @@ function WorkflowsTab() {
     definition.nodes[index] = { ...definition.nodes[index], ...patch };
     setEditing({ ...editing, definition });
     setJsonDraft(JSON.stringify(definition, null, 2));
+  }
+  function addNodeTools(index, node) {
+    const requested = (toolDrafts[node.id] || '').split(/[\n,]+/).map((name) => name.trim()).filter(Boolean);
+    if (!requested.length) return;
+    const unknown = requested.filter((name) => !availableTools.includes(name));
+    if (unknown.length) {
+      setToolErrors((current) => ({ ...current, [node.id]: `Not registered: ${unknown.join(', ')}` }));
+      return;
+    }
+    updateNode(index, { tools: [...new Set([...(node.tools || []), ...requested])] });
+    setToolDrafts((current) => ({ ...current, [node.id]: '' }));
+    setToolErrors((current) => ({ ...current, [node.id]: '' }));
   }
   function addStep() {
     const nodes = [...editing.definition.nodes];
@@ -188,12 +212,28 @@ function WorkflowsTab() {
             </div>
             <label className="field-label" style={{ marginTop: '0.75rem' }}>Instructions for this step</label>
             <textarea className="key-input" rows={3} value={node.instructions || ''} onChange={(e) => updateNode(index, { instructions: e.target.value })} />
+            {node.role === 'finalizer' && <div style={{ marginTop: '0.5rem' }}>
+              <label className="field-label">Return mapped input directly (optional)</label>
+              <input className="key-input" value={node.return_input || ''} onChange={(e) => updateNode(index, { return_input: e.target.value.trim() || undefined })} placeholder="work" />
+              <span className="field-hint">Enter an input-mapping key, such as work, to skip the finalizer model call when that value is already final.</span>
+            </div>}
             <details style={{ marginTop: '0.4rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Built-in {node.role} system prompt</summary><pre className="field-hint" style={{ whiteSpace: 'pre-wrap' }}>{defaultPrompts[node.role]?.prompt || 'Role prompt loads at runtime.'}</pre></details>
             <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts</label><input className="key-input" type="number" min="1" max="3" value={node.max_attempts || 1} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
             <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
               <JsonObjectField label="Input mapping (JSON)" value={node.input_mapping} onChange={(input_mapping) => updateNode(index, { input_mapping })} rows={2} />
               <JsonObjectField label="Output keys and expected types (JSON)" value={node.output_schema} onChange={(output_schema) => updateNode(index, { output_schema })} rows={2} />
-              <label className="field-label">Tools this step may call</label><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem' }}>{availableTools.map((tool) => <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><input type="checkbox" checked={(node.tools || []).includes(tool)} onChange={(event) => updateNode(index, { tools: event.target.checked ? [...new Set([...(node.tools || []), tool])] : (node.tools || []).filter((name) => name !== tool) })} />{tool}</label>)}</div>
+              <label className="field-label">Tools this step may call</label>
+              <span className="field-hint">Select as many tools as this role needs. {(node.tools || []).length} selected.</span>
+              {availableTools.length ? <>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
+                  <input className="key-input" aria-label={`Add tools to ${node.name || node.id}`} value={toolDrafts[node.id] || ''} onChange={(event) => setToolDrafts((current) => ({ ...current, [node.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addNodeTools(index, node); } }} placeholder="get_layout, update_title_color" />
+                  <button type="button" className="btn g small" onClick={() => addNodeTools(index, node)}>Add tools</button>
+                </div>
+                <span className="field-hint">Enter one or more registered tool names separated by commas or new lines.</span>
+                {toolErrors[node.id] && <span className="field-hint" style={{ color: '#b42318' }}>{toolErrors[node.id]}</span>}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.45rem' }}><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [...new Set([...(node.tools || []), ...availableTools])] })}>Select all</button><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [] })}>Clear</button></div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem', marginTop: '0.45rem' }}>{availableTools.map((tool) => <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><input type="checkbox" checked={(node.tools || []).includes(tool)} onChange={(event) => updateNode(index, { tools: event.target.checked ? [...new Set([...(node.tools || []), tool])] : (node.tools || []).filter((name) => name !== tool) })} />{tool}</label>)}</div>
+              </> : <p className="field-hint">No registered tools are available yet.</p>}
               <span className="field-hint">Use $.request, $.variables, or $.steps.&lt;step-id&gt;.output.&lt;key&gt; to pass earlier results. Available tools: {availableTools.join(', ') || 'none configured'}.</span>
             </details>
           </section>)}
@@ -1679,6 +1719,7 @@ function ToolsTab() {
   const [saving, setSaving] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
+  const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState(null);
   const [form, setForm] = useState({
     name: '', description: '', endpoint_url: '',
@@ -1732,6 +1773,57 @@ function ToolsTab() {
     setShowForm(true);
   }
 
+  async function importTools(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    let entries;
+    try {
+      const parsed = JSON.parse(await file.text());
+      entries = Array.isArray(parsed) ? parsed : parsed?.tools;
+      if (!Array.isArray(entries) || entries.length === 0) throw new Error('The file must contain a non-empty tools array.');
+      if (entries.length > 100) throw new Error('Import up to 100 tools per file.');
+      const names = new Set();
+      entries = entries.map((tool, index) => {
+        if (!tool || typeof tool !== 'object' || Array.isArray(tool)) throw new Error(`Tool ${index + 1} must be an object.`);
+        const name = String(tool.name || '').trim();
+        if (!/^[A-Za-z0-9_]+$/.test(name)) throw new Error(`Tool ${index + 1} has an invalid name. Use letters, numbers, and underscores.`);
+        if (names.has(name)) throw new Error(`The file contains the tool name "${name}" more than once.`);
+        names.add(name);
+        if (tool.kind && tool.kind !== 'webhook') throw new Error(`${name}: only webhook tools can be imported from this form.`);
+        if (!String(tool.description || '').trim()) throw new Error(`${name}: description is required.`);
+        let endpoint;
+        try { endpoint = new URL(tool.endpoint_url); } catch { throw new Error(`${name}: endpoint_url must be a valid URL.`); }
+        if (!['http:', 'https:'].includes(endpoint.protocol)) throw new Error(`${name}: endpoint_url must use HTTP or HTTPS.`);
+        const schema = tool.input_schema ?? { type: 'object', properties: {} };
+        if (!schema || typeof schema !== 'object' || Array.isArray(schema)) throw new Error(`${name}: input_schema must be a JSON object.`);
+        const timeout = Number(tool.timeout_ms ?? 10000);
+        if (!Number.isInteger(timeout) || timeout < 1 || timeout > 120000) throw new Error(`${name}: timeout_ms must be an integer between 1 and 120000.`);
+        return { name, description: tool.description.trim(), kind: 'webhook', endpoint_url: endpoint.href, timeout_ms: timeout, input_schema: schema };
+      });
+    } catch (err) {
+      setNotice({ kind: 'error', message: `Could not import tools: ${err.message}` });
+      return;
+    }
+
+    setImporting(true);
+    setNotice(null);
+    const failures = [];
+    let imported = 0;
+    for (const tool of entries) {
+      try { await createCustomTool(tool); imported += 1; }
+      catch (err) { failures.push(`${tool.name}: ${err.message}`); }
+    }
+    await load();
+    setNotice({
+      kind: failures.length ? 'error' : 'success',
+      message: failures.length
+        ? `Imported ${imported} of ${entries.length} tools. ${failures.join(' | ')}`
+        : `Imported ${imported} tools successfully.`,
+    });
+    setImporting(false);
+  }
+
   async function remove(tool) {
     if (!window.confirm(`Delete the tool “${tool.name}”?`)) return;
     try {
@@ -1745,8 +1837,16 @@ function ToolsTab() {
     {notice && <div className={`tab-notice ${notice.kind}`} role="status">{notice.message}</div>}
     <section className="tools-panel">
       <div className="tools-panel-header"><div><h3>Custom tools</h3><p className="field-hint">Webhook tools send the agent’s arguments to your endpoint as a JSON POST.</p></div>
-        <button className="btn p" onClick={() => { setShowForm((visible) => !visible); setEditingTool(null); }}>{showForm ? 'Cancel' : 'Register Tool'}</button>
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <label className={`btn g ${importing ? 'disabled' : ''}`} style={{ cursor: importing ? 'wait' : 'pointer' }}>{importing ? 'Importing…' : 'Import JSON'}<input type="file" accept=".json,application/json" onChange={importTools} disabled={importing} style={{ display: 'none' }} /></label>
+          <button className="btn p" type="button" onClick={() => { setShowForm((visible) => !visible); setEditingTool(null); }}>{showForm ? 'Cancel' : 'Register Tool'}</button>
+        </div>
       </div>
+      <details style={{ margin: '0.75rem 0' }}><summary style={{ cursor: 'pointer' }}>JSON import format and template</summary>
+        <p className="field-hint">Import either a JSON array or an object containing a <code>tools</code> array. Each entry must define a name, description, webhook endpoint, and optional JSON Schema.</p>
+        <pre className="integration-code"><code>{'{ "tools": [{ "name": "get_layout", "kind": "webhook", "description": "Get the current document layout", "endpoint_url": "https://your-app.example.com/tools/get_layout", "timeout_ms": 10000, "input_schema": { "type": "object", "properties": { "document_id": { "type": "string" } }, "required": ["document_id"] } }] }'}</code></pre>
+        <a href="/tools-import-template.json" download="tools-import-template.json">Download JSON template</a>
+      </details>
       {showForm && <form onSubmit={register} className="tools-form">
         <div><label className="field-label">Tool name</label><input className="key-input" required pattern="[A-Za-z0-9_]+" title="Use letters, numbers, and underscores." value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="get_layout" /></div>
         <div><label className="field-label">Type</label><input className="key-input" value="Webhook (HTTP endpoint)" disabled /></div>

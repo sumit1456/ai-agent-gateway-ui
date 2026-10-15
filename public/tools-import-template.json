@@ -1,0 +1,42 @@
+{
+  "tools": [
+    {
+      "name": "get_layout",
+      "kind": "webhook",
+      "description": "Get the current document layout.",
+      "endpoint_url": "https://your-app.example.com/tools/get_layout",
+      "timeout_ms": 10000,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "description": "ID of the document to inspect."
+          }
+        },
+        "required": ["document_id"]
+      }
+    },
+    {
+      "name": "update_title_color",
+      "kind": "webhook",
+      "description": "Set the color of a title element.",
+      "endpoint_url": "https://your-app.example.com/tools/update_title_color",
+      "timeout_ms": 10000,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "element_id": {
+            "type": "string",
+            "description": "ID of the title element."
+          },
+          "color": {
+            "type": "string",
+            "description": "CSS color value, such as red or #ff0000."
+          }
+        },
+        "required": ["element_id", "color"]
+      }
+    }
+  ]
+}
