@@ -247,7 +247,16 @@ export function listCustomTools() {
 }
 
 export function createCustomTool(payload) {
-  return request('/v1/tools/register', { method: 'POST', auth: true, body: payload });
+  const query = new URLSearchParams({
+    name: payload.name,
+    description: payload.description,
+    kind: payload.kind,
+    endpoint_url: payload.endpoint_url,
+    timeout_ms: String(payload.timeout_ms),
+  });
+  return request(`/v1/tools/register?${query.toString()}`, {
+    method: 'POST', auth: true, body: payload.input_schema || {},
+  });
 }
 
 export function deleteCustomTool(toolId) {

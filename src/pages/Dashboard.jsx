@@ -1644,7 +1644,7 @@ function ToolsTab() {
   const [showForm, setShowForm] = useState(false);
   const [notice, setNotice] = useState(null);
   const [form, setForm] = useState({
-    name: '', description: '', endpoint_url: '', auth_token: '',
+    name: '', description: '', endpoint_url: '',
     timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}',
   });
 
@@ -1672,10 +1672,9 @@ function ToolsTab() {
       await createCustomTool({
         name: form.name.trim(), description: form.description.trim(), kind: 'webhook',
         endpoint_url: form.endpoint_url.trim(),
-        auth_token: form.auth_token.trim() || undefined,
         timeout_ms: Number(form.timeout_ms) || 10000, input_schema: inputSchema,
       });
-      setForm({ name: '', description: '', endpoint_url: '', auth_token: '', timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}' });
+      setForm({ name: '', description: '', endpoint_url: '', timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}' });
       setShowForm(false);
       setNotice({ kind: 'success', message: 'Tool registered.' });
       await load();
@@ -1703,7 +1702,6 @@ function ToolsTab() {
         <div><label className="field-label">Type</label><input className="key-input" value="Webhook (HTTP endpoint)" disabled /></div>
         <div className="tools-form-full"><label className="field-label">Description</label><textarea className="key-input" rows={2} required value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Describe when the agent should call this tool." /></div>
         <div className="tools-form-full"><label className="field-label">Endpoint URL</label><input className="key-input" type="url" required value={form.endpoint_url} onChange={(e) => setForm({ ...form, endpoint_url: e.target.value })} placeholder="https://pdf-editor-backend.com/tool/get_layout" /></div>
-        <div><label className="field-label">Authorization token (optional)</label><input className="key-input" type="password" autoComplete="new-password" value={form.auth_token} onChange={(e) => setForm({ ...form, auth_token: e.target.value })} placeholder="Bearer token" /><span className="field-hint">Sent in the Authorization header to the endpoint.</span></div>
         <div><label className="field-label">Timeout (milliseconds)</label><input className="key-input" type="number" min="1" max="120000" value={form.timeout_ms} onChange={(e) => setForm({ ...form, timeout_ms: e.target.value })} /></div>
         <div className="tools-form-full"><label className="field-label">Input schema (JSON Schema)</label><textarea className="key-input" rows={8} value={form.input_schema} onChange={(e) => setForm({ ...form, input_schema: e.target.value })} spellCheck="false" /><span className="field-hint">Define properties and required fields here. These fields tell the agent which arguments it can send.</span></div>
         <div className="tools-form-full"><button className="btn p" type="submit" disabled={saving}>{saving ? 'Registering…' : 'Save Tool'}</button></div>
