@@ -246,6 +246,14 @@ export function listCustomTools() {
   return request('/v1/tools/', { auth: true });
 }
 
+export function createCustomTool(payload) {
+  return request('/v1/tools/register', { method: 'POST', auth: true, body: payload });
+}
+
+export function deleteCustomTool(toolId) {
+  return request(`/v1/tools/${encodeURIComponent(toolId)}`, { method: 'DELETE', auth: true });
+}
+
 export function listBuiltinTools() {
   return request('/v1/builtin-tools');
 }
