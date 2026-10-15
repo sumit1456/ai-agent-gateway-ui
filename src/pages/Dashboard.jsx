@@ -1649,6 +1649,7 @@ function IntegrationTab() {
 
     <section className="integration-panel">
       <h3>Integration templates</h3>
+      <p className="field-hint"><a href="/guide.md" target="_blank" rel="noreferrer">Open the detailed integration guide (guide.md)</a> · <a href="/guide.md" download="agent-gateway-integration-guide.md">Download Markdown</a></p>
       <p className="field-hint">Send the caller's complete data as an object in <code>input</code>. The gateway also accepts a plain string when that is all you have. Keep identity and conversation metadata at the request level: derive <code>X-End-User-ID</code> on your server from the authenticated user, and send the same <code>external_session_id</code> on every turn in that conversation. Do not trust an end-user ID supplied by the browser.</p>
       <pre className="integration-code"><code>{'{ "input": { "message": "Summarize this document", "documentId": "doc-456", "sessionId": "conversation-789" }, "external_session_id": "conversation-789", "variables": { "locale": "en" } }'}</code></pre>
       <p className="field-hint"><code>input</code> is the request data the workflow receives. <code>external_session_id</code> links turns to conversation history; <code>X-End-User-ID</code> scopes that session to the verified end user. <code>variables</code> is optional agent template/context data. Reuse the same end-user and session IDs across turns. If you omit the session ID, the gateway uses its default session for that agent and end user; supply different session IDs for separate conversations.</p>
