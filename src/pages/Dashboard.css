@@ -201,6 +201,16 @@
   gap: 16px;
 }
 
+.agent-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+}
+
+.agent-grid .provider-card {
+  width: 100%;
+  min-width: 0;
+  cursor: default;
+}
+
 .provider-card {
   display: flex;
   flex-direction: column;
@@ -520,7 +530,7 @@
 .tools-list { display: grid; gap: 12px; }
 .tools-list-item {
   display: grid;
-  grid-template-columns: minmax(100px, 0.8fr) minmax(0, 2fr) minmax(140px, 1.5fr) auto;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(0, 2fr) minmax(140px, 1.5fr) repeat(3, auto);
   align-items: center;
   gap: 16px;
   padding: 14px;
@@ -552,6 +562,7 @@
 
 .agent-id-row {
   width: 100%;
+  min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -566,8 +577,56 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-.agent-id-row code { flex: 1; }
+.agent-id-row code { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .agent-id-row .btn { flex: 0 0 auto; }
+
+.agent-tools-summary {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 0;
+  font-size: 13px;
+}
+
+.agent-tool-step {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.agent-tool-step span:first-child { color: var(--muted); font-size: 12px; }
+.agent-tool-step span:nth-child(2) { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.agent-tool-missing { color: #f98b82; }
+
+.workflow-step-tools {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.workflow-tool-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px 12px;
+  margin-top: 6px;
+}
+
+.workflow-tool-options label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
 
 .integration-page { display: grid; gap: 18px; max-width: 1050px; }
 .integration-panel {

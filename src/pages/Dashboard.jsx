@@ -59,93 +59,22 @@ function JsonObjectField({ label, value, onChange, rows = 3 }) {
 
 const OUTPUT_TYPES = ['string', 'number', 'integer', 'boolean', 'object', 'array'];
 
-function OutputContractField({ value, onChange }) {
-  const entries = Object.entries(value || {});
-  function updateEntry(index, key, nextValue) {
-    const next = [...entries];
-    next[index] = [key, nextValue];
-    onChange(Object.fromEntries(next.filter(([name]) => name.trim())));
-  }
+function InputMappingJsonField({ value, previousNodes = [], onChange }) {
+  const previous = previousNodes.at(-1);
+  const suggested = previous ? { input: `$.steps.${previous.id}.output` } : { input: '$.request' };
   return <div>
-    <label className="field-label">Output JSON format</label>
-    <span className="field-hint">Define the JSON object this step must return. For example, <code>{'{"layout":"object"}'}</code> means the step returns an object with a <code>layout</code> field. These values are types, not data paths.</span>
-    <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.4rem' }}>
-      {entries.map(([key, type], index) => <div key={`${index}-${key}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) minmax(130px, 0.8fr) auto', gap: '0.4rem' }}>
-        <input className="key-input" aria-label="Output field name" value={key} placeholder="layout" onChange={(event) => updateEntry(index, event.target.value, type)} />
-        <select className="default-select" aria-label={`Type for ${key || 'output field'}`} value={OUTPUT_TYPES.includes(type) ? type : ''} onChange={(event) => updateEntry(index, key, event.target.value)}>
-          <option value="" disabled>Choose type</option>
-          {OUTPUT_TYPES.map((option) => <option value={option} key={option}>{option}</option>)}
-        </select>
-        <button type="button" className="btn g small" aria-label={`Remove ${key || 'output field'}`} onClick={() => onChange(Object.fromEntries(entries.filter((_, entryIndex) => entryIndex !== index)))}>Remove</button>
-      </div>)}
-      <button type="button" className="btn g small" style={{ justifySelf: 'start' }} onClick={() => {
-        let key = 'result';
-        let suffix = 2;
-        while (Object.hasOwn(value || {}, key)) key = `result_${suffix++}`;
-        onChange({ ...(value || {}), [key]: 'string' });
-      }}>+ Add output field</button>
-    </div>
-    {!entries.length && <span className="field-hint">No fields yet. Add an output field or use the advanced workflow JSON editor.</span>}
+    <label className="field-label">Input JSON mapping</label>
+    <span className="field-hint">Enter JSON whose keys are shown to the agent and whose values are source paths. Use <code>$.request</code> for the user message. {previous ? <>The previous step is <strong>{previous.name || previous.id}</strong>; use <code>$.steps.{previous.id}.output</code> for its complete output.</> : <>The first step usually receives the user message as <code>input</code>.</>}</span>
+    <JsonObjectField label="Input mapping JSON" value={value} onChange={onChange} rows={6} />
+    <span className="field-hint">Suggested mapping: <code>{JSON.stringify(suggested, null, 2)}</code></span>
   </div>;
 }
 
-function InputMappingField({ value, previousNodes = [], onChange }) {
-  const mappings = value || {};
-  const sources = [
-    { path: '$.request', label: 'Original user request' },
-    { path: '$.variables', label: 'Workflow variables' },
-    ...previousNodes.flatMap((node) => [
-      { path: `$.steps.${node.id}.output`, label: `${node.name || node.id} — full output (${node.id})` },
-      ...Object.keys(node.output_schema || {}).map((key) => ({
-        path: `$.steps.${node.id}.output.${key}`,
-        label: `${node.name || node.id} — ${key} (${node.id})`,
-      })),
-    ]),
-  ];
-  function setMapping(oldKey, key, path) {
-    const next = { ...mappings };
-    if (oldKey !== key) delete next[oldKey];
-    if (key.trim()) next[key] = path;
-    onChange(next);
-  }
+function OutputContractField({ value, onChange }) {
   return <div>
-    <label className="field-label">Input JSON this step receives</label>
-    <span className="field-hint">Each row creates one key in the JSON sent to the agent. Step 1 starts with <code>{'{"input": "the user request"}'}</code>. Later steps are prefilled with the previous step’s complete output as <code>input</code>.</span>
-    <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.4rem' }}>
-      {Object.entries(mappings).map(([key, path], index) => {
-        const knownPath = sources.some((source) => source.path === path);
-        return <div key={index} style={{ display: 'grid', gridTemplateColumns: 'minmax(100px, 0.8fr) minmax(180px, 1.5fr) auto', gap: '0.4rem' }}>
-          <input className="key-input" aria-label="Input field name" value={key} onChange={(event) => setMapping(key, event.target.value, path)} />
-          <select className="default-select" aria-label={`Source for ${key}`} value={knownPath ? path : `custom:${key}`} onChange={(event) => {
-            if (event.target.value.startsWith('custom:')) return;
-            setMapping(key, key, event.target.value);
-          }}>
-            {sources.map((source) => <option key={source.path} value={source.path}>{source.label}</option>)}
-            {!knownPath && <option value={`custom:${key}`}>Unavailable/custom path: {path}</option>}
-          </select>
-          <button type="button" className="btn g small" aria-label={`Remove input ${key}`} onClick={() => {
-            const next = { ...mappings };
-            delete next[key];
-            onChange(next);
-          }}>Remove</button>
-        </div>;
-      })}
-      <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-        <button type="button" className="btn g small" onClick={() => {
-          let key = 'value';
-          let suffix = 2;
-          while (Object.hasOwn(mappings, key)) key = `value_${suffix++}`;
-          onChange({ ...mappings, [key]: '$.request' });
-        }}>+ Add input</button>
-        {previousNodes.length > 0 && <button type="button" className="btn g small" onClick={() => {
-          const previous = previousNodes.at(-1);
-          onChange({ input: `$.steps.${previous.id}.output` });
-        }}>Add previous step output ({previousNodes.at(-1).name || previousNodes.at(-1).id})</button>}
-      </div>
-    </div>
-    <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.82rem' }}>Advanced: edit input mapping JSON</summary>
-      <JsonObjectField label="Input mapping JSON" value={mappings} onChange={onChange} rows={3} />
-    </details>
+    <label className="field-label">Output JSON format</label>
+    <span className="field-hint">Write the JSON shape the model must return. Values are expected types. Example: <code>{'{"layout":"object","summary":"string"}'}</code>. This is a format, not an output value.</span>
+    <JsonObjectField label="Output format JSON" value={value} onChange={onChange} rows={5} />
   </div>;
 }
 
@@ -214,8 +143,6 @@ function WorkflowsTab() {
   const [presets, setPresets] = useState([]);
   const [workflows, setWorkflows] = useState([]);
   const [availableTools, setAvailableTools] = useState([]);
-  const [toolDrafts, setToolDrafts] = useState({});
-  const [toolErrors, setToolErrors] = useState({});
   const [editing, setEditing] = useState(null);
   const [advanced, setAdvanced] = useState(false);
   const [jsonDraft, setJsonDraft] = useState('');
@@ -272,18 +199,6 @@ function WorkflowsTab() {
     definition.nodes[index] = { ...definition.nodes[index], ...patch };
     setEditing({ ...editing, definition });
     setJsonDraft(JSON.stringify(definition, null, 2));
-  }
-  function addNodeTools(index, node) {
-    const requested = (toolDrafts[node.id] || '').split(/[\n,]+/).map((name) => name.trim()).filter(Boolean);
-    if (!requested.length) return;
-    const unknown = requested.filter((name) => !availableTools.includes(name));
-    if (unknown.length) {
-      setToolErrors((current) => ({ ...current, [node.id]: `Not registered: ${unknown.join(', ')}` }));
-      return;
-    }
-    updateNode(index, { tools: [...new Set([...(node.tools || []), ...requested])] });
-    setToolDrafts((current) => ({ ...current, [node.id]: '' }));
-    setToolErrors((current) => ({ ...current, [node.id]: '' }));
   }
   function addStep() {
     const nodes = [...editing.definition.nodes];
@@ -360,6 +275,14 @@ function WorkflowsTab() {
               <div><label className="field-label">Step name</label><input className="key-input" value={node.name || ''} onChange={(e) => updateNode(index, { name: e.target.value })} /></div>
               <div><label className="field-label">Role behavior</label><select className="default-select" value={node.role} onChange={(e) => updateNode(index, { role: e.target.value })}>{WORKFLOW_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></div>
             </div>
+            <div className="workflow-step-tools">
+              <label className="field-label">Tools enabled for this step ({(node.tools || []).length} selected)</label>
+              <span className="field-hint">These are the registered tools available to this step. A checked tool can be called by this step; a cleared tool cannot.</span>
+              {availableTools.length ? <>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.45rem' }}><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [...new Set([...(node.tools || []), ...availableTools])] })}>Select all</button><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [] })}>Clear</button></div>
+                <div className="workflow-tool-options">{availableTools.map((tool) => <label key={tool}><input type="checkbox" checked={(node.tools || []).includes(tool)} onChange={(event) => updateNode(index, { tools: event.target.checked ? [...new Set([...(node.tools || []), tool])] : (node.tools || []).filter((name) => name !== tool) })} />{tool}</label>)}</div>
+              </> : <p className="field-hint">No registered tools are available. Register and test tools in the Tools section first.</p>}
+            </div>
             <label className="field-label" style={{ marginTop: '0.75rem' }}>Instructions for this step</label>
             <textarea className="key-input" rows={3} value={node.instructions || ''} onChange={(e) => updateNode(index, { instructions: e.target.value })} placeholder={'Task: describe what this step must do.\nExplain which input fields to use and how to use the result from the previous step.\nReturn only the JSON fields defined below.'} />
             <span className="field-hint">Write the task in everyday language: what to do, which input to use, and what result to produce. The JSON input and output format are provided separately. Tool argument schemas are provided automatically for selected tools.</span>
@@ -370,7 +293,7 @@ function WorkflowsTab() {
             </div>}
             <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts</label><input className="key-input" type="number" min="1" max="3" value={node.max_attempts || 1} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
             <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
-              <InputMappingField value={node.input_mapping} previousNodes={previousNodes} onChange={(input_mapping) => updateNode(index, { input_mapping })} />
+              <InputMappingJsonField value={node.input_mapping} previousNodes={previousNodes} onChange={(input_mapping) => updateNode(index, { input_mapping })} />
               <span className="field-hint" style={{ marginTop: '0.35rem' }}>A tool name is not a workflow step ID. Step IDs are shown above each step.</span>
               {previousNodes.length > 0 && unavailableRefs.length > 0 && <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', margin: '0.4rem 0' }}>
                 {unavailableRefs.length > 0 && <button type="button" className="btn g small" onClick={() => {
@@ -393,19 +316,6 @@ function WorkflowsTab() {
                 This output contract contains a path. Put paths in the next step’s input mapping; use a type such as <code>object</code> here.{' '}
                 <button type="button" className="btn g small" onClick={() => updateNode(index, { output_schema: Object.fromEntries(Object.entries(node.output_schema || {}).map(([key, type]) => [key, typeof type === 'string' && type.startsWith('$.') ? 'object' : type])) })}>Replace path values with object</button>
               </div>}
-              <label className="field-label">Tools this step may call</label>
-              <span className="field-hint">Select the registered tools this model may call. The model chooses argument values from the input and each tool’s input schema. {(node.tools || []).length} selected.</span>
-              {availableTools.length ? <>
-                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem' }}>
-                  <input className="key-input" aria-label={`Add tools to ${node.name || node.id}`} value={toolDrafts[node.id] || ''} onChange={(event) => setToolDrafts((current) => ({ ...current, [node.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addNodeTools(index, node); } }} placeholder="get_layout, update_title_color" />
-                  <button type="button" className="btn g small" onClick={() => addNodeTools(index, node)}>Add tools</button>
-                </div>
-                <span className="field-hint">Enter one or more registered tool names separated by commas or new lines.</span>
-                {toolErrors[node.id] && <span className="field-hint" style={{ color: '#b42318' }}>{toolErrors[node.id]}</span>}
-                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.45rem' }}><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [...new Set([...(node.tools || []), ...availableTools])] })}>Select all</button><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [] })}>Clear</button></div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem', marginTop: '0.45rem' }}>{availableTools.map((tool) => <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><input type="checkbox" checked={(node.tools || []).includes(tool)} onChange={(event) => updateNode(index, { tools: event.target.checked ? [...new Set([...(node.tools || []), tool])] : (node.tools || []).filter((name) => name !== tool) })} />{tool}</label>)}</div>
-              </> : <p className="field-hint">No registered tools are available yet.</p>}
-              <span className="field-hint">Tool selection controls callable actions. Input mapping controls data passed into the step. Available registered tools: {availableTools.join(', ') || 'none configured'}.</span>
             </details>
           </section>;
           })}
@@ -1237,14 +1147,14 @@ function AgentsTab() {
               <option value="">Select a workflow…</option>
               {workflows.map((workflow) => <option key={workflow.version_id} value={workflow.version_id}>{workflow.name} · v{workflow.version}</option>)}
             </select>
-            <span className="field-hint">The workflow defines all nodes, instructions, inputs, transitions, outputs, and per-step tools.</span>
+            <span className="field-hint">The workflow defines all nodes, instructions, inputs, transitions, outputs, and per-step tools. To make a registered tool callable: select it on the workflow step, save a new workflow version, then select that version here and save the agent.</span>
             {selectedWorkflow && <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
               <button type="button" className="btn g small" onClick={() => { setWorkflowDraft(JSON.stringify(selectedWorkflow.definition, null, 2)); setWorkflowEditError(''); }}>Edit workflow here</button>
               {workflowDraft !== null && <button type="button" className="btn g small" onClick={() => { setWorkflowDraft(null); setWorkflowEditError(''); }}>Discard workflow edits</button>}
             </div>}
             {selectedWorkflow && <div style={{ marginTop: '0.75rem', border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '0.75rem' }}>
               <strong>Workflow nodes ({selectedWorkflow.definition.nodes.length})</strong>
-              <ol style={{ margin: '0.5rem 0 0', paddingLeft: '1.4rem' }}>{selectedWorkflow.definition.nodes.map((node) => <li key={node.id}><strong>{node.name || node.id}</strong> <span className="field-hint">({node.role}) · {node.id}</span></li>)}</ol>
+              <ol style={{ margin: '0.5rem 0 0', paddingLeft: '1.4rem' }}>{selectedWorkflow.definition.nodes.map((node) => <li key={node.id}><strong>{node.name || node.id}</strong> <span className="field-hint">({node.role}) · {node.id} · Tools: {(node.tools || []).join(', ') || 'none assigned'}</span></li>)}</ol>
             </div>}
             {workflowDraft !== null && <div style={{ marginTop: '0.75rem' }}>
               <label className="field-label">Workflow definition (JSON)</label>
@@ -1384,7 +1294,7 @@ function AgentsTab() {
           <button className="btn p" onClick={() => openAgentForm()}>Create Agent</button>
         </div>
       ) : (
-        <div className="provider-grid">
+        <div className="provider-grid agent-grid">
           {agents.map((agent) => {
             const agentProv = providers.find((p) => p.id === agent.provider_id);
             const providerName = agentProv ? agentProv.provider_id : agent.provider_id;
@@ -1392,6 +1302,10 @@ function AgentsTab() {
             const kbIds = (agent.config && agent.config.knowledge_base_ids) || [];
             const agentWorkflow = workflows.find((workflow) => workflow.version_id === agent.config?.workflow_version_id);
             const assignedToolNames = [...new Set((agentWorkflow?.definition?.nodes || []).flatMap((node) => node.tools || []))];
+            const knownToolNames = new Set([
+              ...registeredTools.map((tool) => tool.name),
+              ...builtinTools.map((tool) => tool.name),
+            ]);
             const fullAgentConfig = {
               agent: { id: agent.id, name: agent.name, provider_id: agent.provider_id },
               config: agent.config || {},
@@ -1421,6 +1335,10 @@ function AgentsTab() {
                   </div>
                 </div>
                 <div className="agent-id-row"><strong>Agent ID</strong><code>{agent.id}</code><button className="btn g small" type="button" onClick={() => navigator.clipboard.writeText(agent.id)}>Copy</button></div>
+                <div className="agent-tools-summary">
+                  <strong>Tools available to workflow steps</strong>
+                  {agentWorkflow?.definition?.nodes?.some((node) => (node.tools || []).length > 0) ? agentWorkflow.definition.nodes.filter((node) => (node.tools || []).length > 0).map((node) => <div key={node.id} className="agent-tool-step"><span>{node.name || node.id} ({node.role})</span><span>{node.tools.map((name) => <span key={name} className={!knownToolNames.has(name) ? 'agent-tool-missing' : name === 'semantic_search' && !kbIds.length ? 'agent-tool-missing' : ''}>{name}{!knownToolNames.has(name) ? ' — not registered' : name === 'semantic_search' && !kbIds.length ? ' — no knowledge base attached' : ''}</span>)}</span></div>) : <span className="field-hint">No tools are assigned to this workflow. Registering tools alone does not make them callable; check the tools on the workflow step that needs them.</span>}
+                </div>
                 {models && (
                   <div style={{ fontSize: '0.8rem', opacity: 0.85, width: '100%', display: 'flex', flexDirection: 'column', gap: '0.2rem', margin: '0.5rem 0' }}>
                     <div><strong>Planner:</strong> {models.planner}</div>
@@ -1591,6 +1509,18 @@ function IntegrationTab() {
   </div>;
 }
 
+function sampleToolArguments(schema) {
+  const properties = schema?.properties || {};
+  return Object.fromEntries(Object.entries(properties).map(([name, definition]) => {
+    const type = definition?.type;
+    const value = type === 'integer' || type === 'number' ? 1
+      : type === 'boolean' ? false
+        : type === 'object' ? {}
+          : type === 'array' ? [] : `example_${name}`;
+    return [name, value];
+  }));
+}
+
 function ToolsTab() {
   const [tools, setTools] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1619,16 +1549,7 @@ function ToolsTab() {
   function sampleArguments() {
     try {
       const schema = JSON.parse(form.input_schema || '{}');
-      const properties = schema.properties || {};
-      const sample = Object.fromEntries(Object.entries(properties).map(([name, definition]) => {
-        const type = definition?.type;
-        const value = type === 'integer' || type === 'number' ? 1
-          : type === 'boolean' ? false
-            : type === 'object' ? {}
-              : type === 'array' ? [] : `example_${name}`;
-        return [name, value];
-      }));
-      setTestArguments(JSON.stringify(sample, null, 2));
+      setTestArguments(JSON.stringify(sampleToolArguments(schema), null, 2));
       setTestResult(null);
     } catch {
       setNotice({ kind: 'error', message: 'Fix the input schema JSON before generating sample arguments.' });
@@ -1710,7 +1631,7 @@ function ToolsTab() {
       timeout_ms: tool.timeout_ms || 10000,
       input_schema: JSON.stringify(tool.input_schema || { type: 'object', properties: {} }, null, 2),
     });
-    setTestArguments('{}');
+    setTestArguments(JSON.stringify(sampleToolArguments(tool.input_schema), null, 2));
     setTestResult(null);
     setShowForm(true);
   }
@@ -1836,7 +1757,7 @@ function ToolsTab() {
         </div>
         <div className="tools-form-full"><button className="btn p" type="submit" disabled={saving}>{saving ? 'Saving…' : editingTool ? 'Update Tool' : 'Save Tool'}</button></div>
       </form>}
-      {loading ? <p>Loading tools…</p> : tools.length === 0 ? <p>No custom tools registered yet.</p> : <div className="tools-list">{tools.map((tool) => <div className="tools-list-item" key={tool.id}><div><strong>{tool.name}</strong><div className="tools-kind">{tool.kind}</div></div><div>{tool.description}</div><div>{tool.endpoint_url || 'Client executed'}</div><button className="btn g" onClick={() => edit(tool)} disabled={deletingAll}>Edit</button><button className="btn danger" onClick={() => remove(tool)} disabled={deletingAll}>Delete</button></div>)}</div>}
+      {loading ? <p>Loading tools…</p> : tools.length === 0 ? <p>No custom tools registered yet.</p> : <div className="tools-list">{tools.map((tool) => <div className="tools-list-item" key={tool.id}><div><strong>{tool.name}</strong><div className="tools-kind">{tool.kind}</div></div><div>{tool.description}</div><div>{tool.endpoint_url || 'Client executed'}</div><button className="btn p" onClick={() => { edit(tool); window.setTimeout(() => document.querySelector('.tools-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0); }} disabled={deletingAll}>Test</button><button className="btn g" onClick={() => edit(tool)} disabled={deletingAll}>Edit</button><button className="btn danger" onClick={() => remove(tool)} disabled={deletingAll}>Delete</button></div>)}</div>}
     </section>
   </div>;
 }
