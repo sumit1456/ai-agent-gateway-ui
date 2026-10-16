@@ -816,6 +816,7 @@ function AgentsTab() {
     executor: '',
     reviewer: '',
     workflow_version_id: '',
+    execution_style: 'graph_workflow',
     knowledge_base_ids: [],
     system_prompt: 'You are a helpful assistant.',
     // Custom prompts (optional)
@@ -933,6 +934,7 @@ function AgentsTab() {
       executor: models.executor || '',
       reviewer: models.reviewer || '',
       workflow_version_id: config.workflow_version_id || '',
+      execution_style: config.execution_style || 'graph_workflow',
       context_window_tokens: config.context_window_tokens ?? 4096,
       knowledge_base_ids: config.knowledge_base_ids || [],
       system_prompt: config.system_prompt || 'You are a helpful assistant.',
@@ -975,6 +977,7 @@ function AgentsTab() {
         name: formData.name || 'New Agent',
         provider_id: formData.provider_id,
         workflow_version_id: formData.workflow_version_id || null,
+        execution_style: formData.execution_style || 'graph_workflow',
         models: {
           planner: formData.planner,
           executor: formData.executor,
@@ -1007,6 +1010,7 @@ function AgentsTab() {
         executor: '',
         reviewer: '',
         workflow_version_id: '',
+        execution_style: 'graph_workflow',
         context_window_tokens: 4096,
         knowledge_base_ids: [],
         system_prompt: 'You are a helpful assistant.',
@@ -1075,6 +1079,18 @@ function AgentsTab() {
             </select>
             <span className="field-hint">Choose a saved workflow. This workflow decides which steps run and in what order. Create or customize workflows in the Workflows section.</span>
           </div>
+          <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Execution style</label>
+            <select
+              className="default-select"
+              value={formData.execution_style || 'graph_workflow'}
+              onChange={(event) => setFormData({ ...formData, execution_style: event.target.value })}
+            >
+              <option value="graph_workflow">Graph workflow</option>
+              <option value="single_orchestration">Single orchestration node</option>
+            </select>
+            <span className="field-hint">Graph workflow follows the configured workflow steps. Single orchestration runs planning, execution, and review inside one orchestration node.</span>
+          </div>
           {selectedProvider && (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
@@ -1099,7 +1115,7 @@ function AgentsTab() {
                 </div>
               )}
 
-              <div style={{ marginBottom: '1rem' }}>
+              {workflowRoles.has('planner') && <div style={{ marginBottom: '1rem' }}>
                 <label className="field-label">Planner Model</label>
                 <select
                   className="default-select"
@@ -1114,9 +1130,9 @@ function AgentsTab() {
                     </option>
                   ))}
                 </select>
-              </div>
+              </div>}
 
-              <div style={{ marginBottom: '1rem' }}>
+              {workflowRoles.has('executor') && <div style={{ marginBottom: '1rem' }}>
                 <label className="field-label">Executor Model</label>
                 <select
                   className="default-select"
@@ -1131,9 +1147,9 @@ function AgentsTab() {
                     </option>
                   ))}
                 </select>
-              </div>
+              </div>}
 
-              <div style={{ marginBottom: '1rem' }}>
+              {workflowRoles.has('reviewer') && <div style={{ marginBottom: '1rem' }}>
                 <label className="field-label">Reviewer Model</label>
                 <select
                   className="default-select"
@@ -1148,7 +1164,7 @@ function AgentsTab() {
                     </option>
                   ))}
                 </select>
-              </div>
+              </div>}
             </>
           )}
 
