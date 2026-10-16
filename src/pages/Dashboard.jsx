@@ -250,7 +250,13 @@ function WorkflowsTab() {
         <button type="submit" className="btn p" disabled={saving}>{saving ? 'Saving…' : 'Save new workflow version'}</button>
       </form>
     ) : <>
-      <p className="providers-intro">Pick a starter workflow or build your own. Fixed workflows continue through their configured steps in order. Choose Dynamic for general-purpose requests: its first agent selects a configured path, then the workflow continues through that path to completion. To answer from your own documents, attach a knowledge base to the agent and let an executor step use semantic_search. The standard planner/executor workflows include it as an optional tool; it is usable only when a knowledge base is attached. Presets are copied into your account so you can customize them.</p>
+      <ul className="providers-intro">
+        <li>You can change a workflow’s execution style in Agent settings.</li>
+        <li>Choose a starter workflow or build your own.</li>
+        <li>Fixed workflows follow their configured steps; Dynamic chooses a path for each request.</li>
+        <li>For document answers, attach a knowledge base and enable <code>semantic_search</code> on an executor step.</li>
+        <li>Starter workflows are copied to your account so you can customize them.</li>
+      </ul>
       <button className="btn p" onClick={startCustom} style={{ marginBottom: '1rem' }}>+ Create custom workflow</button>
       <h3>Starter workflows</h3>
       <div className="provider-grid">{presets.map((preset) => <article key={preset.id} className="provider-card">
@@ -817,6 +823,7 @@ function AgentsTab() {
     reviewer: '',
     workflow_version_id: '',
     execution_style: 'graph_workflow',
+    max_input_chars: 30000,
     knowledge_base_ids: [],
     system_prompt: 'You are a helpful assistant.',
     // Custom prompts (optional)
@@ -935,6 +942,7 @@ function AgentsTab() {
       reviewer: models.reviewer || '',
       workflow_version_id: config.workflow_version_id || '',
       execution_style: config.execution_style || 'graph_workflow',
+      max_input_chars: config.limits?.max_input_chars ?? 30000,
       context_window_tokens: config.context_window_tokens ?? 4096,
       knowledge_base_ids: config.knowledge_base_ids || [],
       system_prompt: config.system_prompt || 'You are a helpful assistant.',
@@ -978,6 +986,10 @@ function AgentsTab() {
         provider_id: formData.provider_id,
         workflow_version_id: formData.workflow_version_id || null,
         execution_style: formData.execution_style || 'graph_workflow',
+        limits: {
+          ...(editingAgent?.config?.limits || {}),
+          max_input_chars: Number(formData.max_input_chars) || 30000,
+        },
         models: {
           planner: formData.planner,
           executor: formData.executor,
@@ -1011,6 +1023,7 @@ function AgentsTab() {
         reviewer: '',
         workflow_version_id: '',
         execution_style: 'graph_workflow',
+        max_input_chars: 30000,
         context_window_tokens: 4096,
         knowledge_base_ids: [],
         system_prompt: 'You are a helpful assistant.',
@@ -1167,6 +1180,19 @@ function AgentsTab() {
               </div>}
             </>
           )}
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Maximum input length (characters)</label>
+            <input
+              className="key-input"
+              type="number"
+              min="1"
+              max="200000"
+              value={formData.max_input_chars}
+              onChange={(event) => setFormData({ ...formData, max_input_chars: event.target.value })}
+            />
+            <span className="field-hint">Default: 30,000 characters. Set a limit from 1 to 200,000 for each run’s input.</span>
+          </div>
 
           <div style={{ marginBottom: '1rem' }}>
             <label className="field-label">Context Budget (tokens)</label>
@@ -1733,6 +1759,7 @@ function ToolsTab() {
   const [tools, setTools] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
   const [importing, setImporting] = useState(false);
@@ -1841,6 +1868,7 @@ function ToolsTab() {
   }
 
   async function remove(tool) {
+    if (deletingAll) return;
     if (!window.confirm(`Delete the tool “${tool.name}”?`)) return;
     try {
       await deleteCustomTool(tool.id);
@@ -1849,11 +1877,34 @@ function ToolsTab() {
     } catch (err) { setNotice({ kind: 'error', message: err.message }); }
   }
 
+  async function removeAll() {
+    if (!tools.length || deletingAll) return;
+    if (!window.confirm(`Delete all ${tools.length} custom tools? This cannot be undone.`)) return;
+    setDeletingAll(true);
+    setNotice(null);
+    try {
+      const results = await Promise.allSettled(tools.map((tool) => deleteCustomTool(tool.id)));
+      const deletedIds = new Set();
+      const failures = [];
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled') deletedIds.add(tools[index].id);
+        else failures.push(`${tools[index].name}: ${result.reason?.message || 'Delete failed'}`);
+      });
+      setTools((current) => current.filter((tool) => !deletedIds.has(tool.id)));
+      setNotice(failures.length
+        ? { kind: 'error', message: `Deleted ${deletedIds.size} of ${tools.length} tools. ${failures.join(' | ')}` }
+        : { kind: 'success', message: `Deleted all ${tools.length} custom tools.` });
+    } finally {
+      setDeletingAll(false);
+    }
+  }
+
   return <div className="tab-content">
     {notice && <div className={`tab-notice ${notice.kind}`} role="status">{notice.message}</div>}
     <section className="tools-panel">
       <div className="tools-panel-header"><div><h3>Custom tools</h3><p className="field-hint">Webhook tools send the agent’s arguments to your endpoint as a JSON POST.</p></div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {tools.length > 0 && <button className="btn danger" type="button" onClick={removeAll} disabled={deletingAll || loading}>{deletingAll ? 'Deleting all…' : 'Delete all'}</button>}
           <label className={`btn g ${importing ? 'disabled' : ''}`} style={{ cursor: importing ? 'wait' : 'pointer' }}>{importing ? 'Importing…' : 'Import JSON'}<input type="file" accept=".json,application/json" onChange={importTools} disabled={importing} style={{ display: 'none' }} /></label>
           <button className="btn p" type="button" onClick={() => { setShowForm((visible) => !visible); setEditingTool(null); }}>{showForm ? 'Cancel' : 'Register Tool'}</button>
         </div>
@@ -1872,7 +1923,7 @@ function ToolsTab() {
         <div className="tools-form-full"><label className="field-label">Input schema (JSON Schema)</label><textarea className="key-input" rows={8} value={form.input_schema} onChange={(e) => setForm({ ...form, input_schema: e.target.value })} spellCheck="false" /><span className="field-hint">Define properties and required fields here. These fields tell the agent which arguments it can send.</span></div>
         <div className="tools-form-full"><button className="btn p" type="submit" disabled={saving}>{saving ? 'Saving…' : editingTool ? 'Update Tool' : 'Save Tool'}</button></div>
       </form>}
-      {loading ? <p>Loading tools…</p> : tools.length === 0 ? <p>No custom tools registered yet.</p> : <div className="tools-list">{tools.map((tool) => <div className="tools-list-item" key={tool.id}><div><strong>{tool.name}</strong><div className="tools-kind">{tool.kind}</div></div><div>{tool.description}</div><div>{tool.endpoint_url || 'Client executed'}</div><button className="btn g" onClick={() => edit(tool)}>Edit</button><button className="btn danger" onClick={() => remove(tool)}>Delete</button></div>)}</div>}
+      {loading ? <p>Loading tools…</p> : tools.length === 0 ? <p>No custom tools registered yet.</p> : <div className="tools-list">{tools.map((tool) => <div className="tools-list-item" key={tool.id}><div><strong>{tool.name}</strong><div className="tools-kind">{tool.kind}</div></div><div>{tool.description}</div><div>{tool.endpoint_url || 'Client executed'}</div><button className="btn g" onClick={() => edit(tool)} disabled={deletingAll}>Edit</button><button className="btn danger" onClick={() => remove(tool)} disabled={deletingAll}>Delete</button></div>)}</div>}
     </section>
   </div>;
 }
