@@ -33,6 +33,7 @@ import {
   streamRun,
 } from '../api';
 import { useProviderModels } from '../hooks/useProviderModels';
+import { useQueryClient } from '@tanstack/react-query';
 import './Dashboard.css';
 
 const AGENT_PROMPT_ROLES = [
@@ -482,6 +483,8 @@ function ProvidersTab() {
 }
 
 function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDeleted }) {
+  const queryClient = useQueryClient();
+  const invalidateProviderModels = () => queryClient.invalidateQueries({ queryKey: ['provider-models'] });
   const isConfigured = Boolean(existing);
   const [step, setStep] = useState(isConfigured ? 'models' : 'key');
   const [apiKey, setApiKey] = useState('');
@@ -517,6 +520,7 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
         provider_id: provider.provider_id,
         api_key: apiKey.trim(),
       });
+      await invalidateProviderModels();
       setKeyStored(true);
       onKeySaved(row);
       setStep('models');
@@ -573,10 +577,12 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
           api_key: apiKey.trim(),
           ...payload,
         });
+        await invalidateProviderModels();
         onSaved(row, `${provider.display_name} configured`);
         return;
       }
       const row = await updateProvider(provider.provider_id, payload);
+      await invalidateProviderModels();
       onSaved(row, `${provider.display_name} updated`);
     } catch (err) {
       setSaveError(err.message);
@@ -596,6 +602,7 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
     if (!window.confirm(confirmMsg)) return;
     try {
       await deleteProvider(provider.provider_id);
+      await invalidateProviderModels();
       onDeleted(provider.provider_id);
     } catch (err) {
       setSaveError(err.message);
