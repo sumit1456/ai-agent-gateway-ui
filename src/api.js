@@ -255,7 +255,7 @@ export function createCustomTool(payload) {
     timeout_ms: String(payload.timeout_ms),
   });
   return request(`/v1/tools/register?${query.toString()}`, {
-    method: 'POST', auth: true, body: payload.input_schema || {},
+    method: 'POST', auth: true, body: { input_schema: payload.input_schema || {}, auth_token: payload.auth_token || null },
   });
 }
 
@@ -266,9 +266,14 @@ export function updateCustomTool(toolId, payload) {
     endpoint_url: payload.endpoint_url,
     timeout_ms: String(payload.timeout_ms),
   });
-  if (payload.auth_token) query.set('auth_token', payload.auth_token);
   return request(`/v1/tools/${encodeURIComponent(toolId)}?${query.toString()}`, {
-    method: 'PUT', auth: true, body: payload.input_schema || {},
+    method: 'PUT', auth: true, body: { input_schema: payload.input_schema || {}, auth_token: payload.auth_token || null },
+  });
+}
+
+export function testCustomTool(payload) {
+  return request('/v1/tools/test', {
+    method: 'POST', auth: true, body: payload,
   });
 }
 
