@@ -36,17 +36,11 @@ import { useProviderModels } from '../hooks/useProviderModels';
 import { useQueryClient } from '@tanstack/react-query';
 import './Dashboard.css';
 
-const AGENT_PROMPT_ROLES = [
-  ['router', 'Router', 'Classifies a request and can choose among routing options when a workflow includes a router step.'],
-  ['direct', 'Direct responder', 'Handles a request in one focused response when the workflow routes work to this role.'],
-  ['planner', 'Planner', 'Turns the information provided to this step into a plan; it does not perform the planned work.'],
-  ['executor', 'Executor', 'Carries out the task assigned to this step using only its mapped inputs and enabled tools.'],
-  ['controller', 'Workflow controller', 'Chooses among the outgoing workflow connections configured for this controller step.'],
-  ['reviewer', 'Reviewer', 'Checks work against the criteria and evidence supplied to this step. It runs only when the workflow reaches it.'],
-  ['finalizer', 'Final answer writer', 'Presents the completed workflow result in the requested format.'],
-];
-
 const WORKFLOW_ROLES = ['planner', 'executor', 'reviewer', 'finalizer', 'direct', 'router', 'controller'];
+const WORKFLOW_ROLE_LABELS = {
+  planner: 'Planner', executor: 'Executor', reviewer: 'Reviewer', finalizer: 'Finalizer',
+  direct: 'Direct', router: 'Router', controller: 'Controller',
+};
 
 function JsonObjectField({ label, value, onChange, rows = 3 }) {
   const [draft, setDraft] = useState(JSON.stringify(value || {}, null, 2));
@@ -75,7 +69,6 @@ function WorkflowsTab() {
   const [availableTools, setAvailableTools] = useState([]);
   const [toolDrafts, setToolDrafts] = useState({});
   const [toolErrors, setToolErrors] = useState({});
-  const [defaultPrompts, setDefaultPrompts] = useState({});
   const [editing, setEditing] = useState(null);
   const [advanced, setAdvanced] = useState(false);
   const [jsonDraft, setJsonDraft] = useState('');
@@ -94,11 +87,6 @@ function WorkflowsTab() {
         ...customTools.map((tool) => tool.name),
       ];
       setAvailableTools(registeredTools);
-      try {
-        const promptResponse = await fetch(`${import.meta.env.VITE_API_URL || ''}/v1/agents/default-prompts`.replace(/\/$/, ''));
-        const promptData = await promptResponse.json();
-        setDefaultPrompts(promptData.default_prompts || {});
-      } catch { setDefaultPrompts({}); }
       return registeredTools;
     } catch (err) {
       setNotice({ message: err.message, kind: 'error' });
@@ -218,7 +206,6 @@ function WorkflowsTab() {
               <input className="key-input" value={node.return_input || ''} onChange={(e) => updateNode(index, { return_input: e.target.value.trim() || undefined })} placeholder="work" />
               <span className="field-hint">Enter an input-mapping key, such as work, to skip the finalizer model call when that value is already final.</span>
             </div>}
-            <details style={{ marginTop: '0.4rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Built-in {node.role} system prompt</summary><pre className="field-hint" style={{ whiteSpace: 'pre-wrap' }}>{defaultPrompts[node.role]?.prompt || 'Role prompt loads at runtime.'}</pre></details>
             <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts</label><input className="key-input" type="number" min="1" max="3" value={node.max_attempts || 1} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
             <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
               <JsonObjectField label="Input mapping (JSON)" value={node.input_mapping} onChange={(input_mapping) => updateNode(index, { input_mapping })} rows={2} />
@@ -252,7 +239,6 @@ function WorkflowsTab() {
       </form>
     ) : <>
       <ul className="providers-intro">
-        <li>You can change a workflow’s execution style in Agent settings.</li>
         <li>Choose a starter workflow or build your own.</li>
         <li>Fixed workflows follow their configured steps; Dynamic chooses a path for each request.</li>
         <li>For document answers, attach a knowledge base and enable <code>semantic_search</code> on an executor step.</li>
@@ -816,7 +802,6 @@ function AgentsTab() {
   const [workflows, setWorkflows] = useState([]);
   const [providers, setProviders] = useState([]);
   const [knowledgeBases, setKnowledgeBases] = useState([]);
-  const [availableAgentTools, setAvailableAgentTools] = useState([]);
   const [status, setStatus] = useState('loading');
   const [isCreating, setIsCreating] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
@@ -828,22 +813,13 @@ function AgentsTab() {
     planner: '',
     executor: '',
     reviewer: '',
+    router: '',
+    direct: '',
+    controller: '',
+    finalizer: '',
     workflow_version_id: '',
-    execution_style: 'graph_workflow',
     max_input_chars: 30000,
     knowledge_base_ids: [],
-    system_prompt: 'You are a helpful assistant.',
-    // Custom prompts (optional)
-    router_prompt: '',
-    planner_prompt: '',
-    executor_prompt: '',
-    reviewer_prompt: '',
-    direct_prompt: '',
-    finalizer_prompt: '',
-    controller_prompt: '',
-    role_prompt_presets: {},
-    role_instructions: {},
-    tools: [],
   });
   const selectedProvider = providers.find((p) => p.id === formData.provider_id);
   const providerModelsQuery = useProviderModels(selectedProvider?.provider_id, {
@@ -852,16 +828,14 @@ function AgentsTab() {
   const providerModels = Array.from(new Set([
     ...(selectedProvider?.enabled_models || []),
     ...(providerModelsQuery.data || []),
-    formData.planner,
-    formData.executor,
-    formData.reviewer,
+    ...WORKFLOW_ROLES.map((role) => formData[role]),
   ].filter(Boolean)));
   const modelsLoading = providerModelsQuery.isLoading || providerModelsQuery.isFetching;
   const modelsError = providerModelsQuery.error?.message;
   
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [defaultPrompts, setDefaultPrompts] = useState(null);
-  const [rolePresets, setRolePresets] = useState({});
+  const [workflowDraft, setWorkflowDraft] = useState(null);
+  const [workflowEditError, setWorkflowEditError] = useState('');
+  const [savingWorkflow, setSavingWorkflow] = useState(false);
   const selectedWorkflow = workflows.find((workflow) => workflow.version_id === formData.workflow_version_id);
   const workflowRoles = new Set((selectedWorkflow?.definition?.nodes || []).map((node) => node.role));
 
@@ -870,9 +844,7 @@ function AgentsTab() {
     const defaultModel = selectedProvider.default_model || providerModels[0];
     setFormData((prev) => ({
       ...prev,
-      planner: prev.planner || defaultModel,
-      executor: prev.executor || defaultModel,
-      reviewer: prev.reviewer || defaultModel,
+      ...Object.fromEntries(WORKFLOW_ROLES.map((role) => [role, prev[role] || defaultModel])),
     }));
   }, [providerModelsQuery.data, selectedProvider?.default_model]);
 
@@ -883,22 +855,16 @@ function AgentsTab() {
     }
     setStatus('loading');
     try {
-      const [agentsData, providersData, kbData, workflowData, customTools, builtinTools] = await Promise.all([
+      const [agentsData, providersData, kbData, workflowData] = await Promise.all([
         listAgents(),
         listConfiguredProviders(),
         listKnowledgeBases(),
         listWorkflows(),
-        listCustomTools(),
-        listBuiltinTools(),
       ]);
       setAgents(agentsData);
       setProviders(providersData);
       setKnowledgeBases(kbData || []);
       setWorkflows(workflowData || []);
-      setAvailableAgentTools([
-        ...(builtinTools.builtin_tools || []).filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
-        ...(customTools || []).map((tool) => tool.name),
-      ]);
       setStatus('ready');
     } catch (err) {
       console.error(err);
@@ -906,20 +872,8 @@ function AgentsTab() {
     }
   }
   
-  async function loadDefaultPrompts() {
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || ''}/v1/agents/default-prompts`.replace(/\/$/, ''));
-      const data = await response.json();
-      setDefaultPrompts(data.default_prompts);
-      setRolePresets(data.role_presets || {});
-    } catch (err) {
-      console.error('Failed to load default prompts:', err);
-    }
-  }
-
   useEffect(() => {
     load();
-    loadDefaultPrompts();
   }, []);
 
   function flash(message, kind = 'success') {
@@ -931,9 +885,7 @@ function AgentsTab() {
     setFormData((prev) => ({
       ...prev,
       provider_id: providerId,
-      planner: '',
-      executor: '',
-      reviewer: '',
+      ...Object.fromEntries(WORKFLOW_ROLES.map((role) => [role, ''])),
     }));
   }
 
@@ -944,32 +896,41 @@ function AgentsTab() {
     setFormData({
       name: agent?.name || '',
       provider_id: agent?.provider_id || '',
-      planner: models.planner || '',
-      executor: models.executor || '',
-      reviewer: models.reviewer || '',
+      ...Object.fromEntries(WORKFLOW_ROLES.map((role) => [role, models[role] || ''])),
       workflow_version_id: config.workflow_version_id || '',
-      execution_style: config.execution_style || 'graph_workflow',
       max_input_chars: config.limits?.max_input_chars ?? 30000,
       context_window_tokens: config.context_window_tokens ?? 4096,
       knowledge_base_ids: config.knowledge_base_ids || [],
-      system_prompt: config.system_prompt || 'You are a helpful assistant.',
-      router_prompt: config.router_prompt || '',
-      planner_prompt: config.planner_prompt || '',
-      executor_prompt: config.executor_prompt || '',
-      reviewer_prompt: config.reviewer_prompt || '',
-      direct_prompt: config.direct_prompt || '',
-      finalizer_prompt: config.finalizer_prompt || '',
-      controller_prompt: config.controller_prompt || '',
-      role_prompt_presets: config.role_prompt_presets || {},
-      role_instructions: config.role_instructions || {},
-      tools: config.tools?.length ? config.tools : availableAgentTools,
     });
-    setShowAdvanced(Boolean(agent && [
-      config.router_prompt, config.planner_prompt, config.executor_prompt,
-      config.reviewer_prompt, config.direct_prompt, config.finalizer_prompt,
-      config.controller_prompt,
-    ].some(Boolean)));
+    setWorkflowDraft(null);
+    setWorkflowEditError('');
     setIsCreating(true);
+  }
+
+  async function saveWorkflowFromAgent() {
+    if (!selectedWorkflow || workflowDraft === null) return;
+    setSavingWorkflow(true);
+    setWorkflowEditError('');
+    try {
+      const definition = JSON.parse(workflowDraft);
+      const saved = await updateWorkflow(selectedWorkflow.id, {
+        name: selectedWorkflow.name,
+        description: selectedWorkflow.description || '',
+        definition,
+      });
+      setWorkflows((current) => current.map((workflow) => workflow.id === saved.id ? saved : workflow));
+      setFormData((current) => ({ ...current, workflow_version_id: saved.version_id }));
+      setEditingAgent((current) => current ? ({
+        ...current,
+        config: { ...(current.config || {}), workflow_version_id: saved.version_id },
+      }) : current);
+      setWorkflowDraft(null);
+      flash('Workflow saved. This version is now selected for the agent.');
+    } catch (err) {
+      setWorkflowEditError(err instanceof SyntaxError ? 'Workflow JSON must be valid before saving.' : err.message);
+    } finally {
+      setSavingWorkflow(false);
+    }
   }
 
   async function handleCreate(e) {
@@ -982,8 +943,13 @@ function AgentsTab() {
       flash('Choose a workflow before saving this agent. Create one from a preset or build a custom workflow in the Workflows section.', 'error');
       return;
     }
-    if (!formData.planner || !formData.executor || !formData.reviewer) {
-      flash('Please select models for planner, executor, and reviewer.', 'error');
+    if (workflowDraft !== null) {
+      flash('Save or discard your workflow edits before saving the agent.', 'error');
+      return;
+    }
+    const missingRoleModels = [...workflowRoles].filter((role) => !formData[role]);
+    if (missingRoleModels.length) {
+      flash(`Choose a model for each role used by this workflow: ${missingRoleModels.join(', ')}.`, 'error');
       return;
     }
     try {
@@ -991,32 +957,16 @@ function AgentsTab() {
         ...(editingAgent?.config || {}),
         name: formData.name || 'New Agent',
         provider_id: formData.provider_id,
-        workflow_version_id: formData.workflow_version_id || null,
-        execution_style: formData.execution_style || 'graph_workflow',
+        workflow_version_id: formData.workflow_version_id,
         limits: {
           ...(editingAgent?.config?.limits || {}),
           max_input_chars: Number(formData.max_input_chars) || 30000,
         },
-        models: {
-          planner: formData.planner,
-          executor: formData.executor,
-          reviewer: formData.reviewer,
-        },
+        models: Object.fromEntries(WORKFLOW_ROLES.map((role) => [role, formData[role] || null])),
         context_window_tokens: formData.context_window_tokens === 'none'
           ? null
           : Number(formData.context_window_tokens) || 4096,
         knowledge_base_ids: formData.knowledge_base_ids,
-        system_prompt: formData.system_prompt,
-        router_prompt: formData.router_prompt || null,
-        planner_prompt: formData.planner_prompt || null,
-        executor_prompt: formData.executor_prompt || null,
-        reviewer_prompt: formData.reviewer_prompt || null,
-        direct_prompt: formData.direct_prompt || null,
-        finalizer_prompt: formData.finalizer_prompt || null,
-        controller_prompt: formData.controller_prompt || null,
-        role_prompt_presets: formData.role_prompt_presets || {},
-        role_instructions: formData.role_instructions || {},
-        tools: formData.tools || [],
       };
       if (editingAgent) await updateAgent(editingAgent.id, payload);
       else await createAgent(payload);
@@ -1028,15 +978,14 @@ function AgentsTab() {
         planner: '',
         executor: '',
         reviewer: '',
+        router: '',
+        direct: '',
+        controller: '',
+        finalizer: '',
         workflow_version_id: '',
-        execution_style: 'graph_workflow',
         max_input_chars: 30000,
         context_window_tokens: 4096,
         knowledge_base_ids: [],
-        system_prompt: 'You are a helpful assistant.',
-        role_prompt_presets: {},
-        role_instructions: {},
-        tools: availableAgentTools,
       });
       flash(editingAgent ? 'Agent updated successfully!' : 'Agent created successfully!');
       load();
@@ -1093,23 +1042,26 @@ function AgentsTab() {
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label className="field-label">Workflow</label>
-            <select className="default-select" required value={formData.workflow_version_id || ''} onChange={(e) => setFormData({ ...formData, workflow_version_id: e.target.value })}>
+            <select className="default-select" required value={formData.workflow_version_id || ''} onChange={(e) => { setFormData({ ...formData, workflow_version_id: e.target.value }); setWorkflowDraft(null); setWorkflowEditError(''); }}>
               <option value="">Select a workflow…</option>
               {workflows.map((workflow) => <option key={workflow.version_id} value={workflow.version_id}>{workflow.name} · v{workflow.version}</option>)}
             </select>
-            <span className="field-hint">Choose a saved workflow. This workflow decides which steps run and in what order. Create or customize workflows in the Workflows section.</span>
-          </div>
-          <div style={{ marginBottom: '1rem' }}>
-            <label className="field-label">Execution style</label>
-            <select
-              className="default-select"
-              value={formData.execution_style || 'graph_workflow'}
-              onChange={(event) => setFormData({ ...formData, execution_style: event.target.value })}
-            >
-              <option value="graph_workflow">Graph workflow</option>
-              <option value="single_orchestration">Single orchestration node</option>
-            </select>
-            <span className="field-hint">Graph workflow follows the configured workflow steps. Single orchestration runs planning, execution, and review inside one orchestration node.</span>
+            <span className="field-hint">The workflow defines all nodes, instructions, inputs, transitions, outputs, and per-step tools.</span>
+            {selectedWorkflow && <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <button type="button" className="btn g small" onClick={() => { setWorkflowDraft(JSON.stringify(selectedWorkflow.definition, null, 2)); setWorkflowEditError(''); }}>Edit workflow here</button>
+              {workflowDraft !== null && <button type="button" className="btn g small" onClick={() => { setWorkflowDraft(null); setWorkflowEditError(''); }}>Discard workflow edits</button>}
+            </div>}
+            {selectedWorkflow && <div style={{ marginTop: '0.75rem', border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '0.75rem' }}>
+              <strong>Workflow nodes ({selectedWorkflow.definition.nodes.length})</strong>
+              <ol style={{ margin: '0.5rem 0 0', paddingLeft: '1.4rem' }}>{selectedWorkflow.definition.nodes.map((node) => <li key={node.id}><strong>{node.name || node.id}</strong> <span className="field-hint">({node.role}) · {node.id}</span></li>)}</ol>
+            </div>}
+            {workflowDraft !== null && <div style={{ marginTop: '0.75rem' }}>
+              <label className="field-label">Workflow definition (JSON)</label>
+              <textarea className="key-input" rows={18} value={workflowDraft} onChange={(event) => setWorkflowDraft(event.target.value)} spellCheck={false} />
+              <span className="field-hint">Edit every node’s role instructions, mapped inputs, output contract, tools, transitions, and limits here.</span>
+              {workflowEditError && <div className="field-hint" style={{ color: '#b42318' }}>{workflowEditError}</div>}
+              <button type="button" className="btn p" style={{ marginTop: '0.5rem' }} onClick={saveWorkflowFromAgent} disabled={savingWorkflow}>{savingWorkflow ? 'Saving workflow…' : 'Save workflow version'}</button>
+            </div>}
           </div>
           {selectedProvider && (
             <>
@@ -1135,56 +1087,18 @@ function AgentsTab() {
                 </div>
               )}
 
-              {workflowRoles.has('planner') && <div style={{ marginBottom: '1rem' }}>
-                <label className="field-label">Planner Model</label>
+              {[...workflowRoles].map((role) => <div key={role} style={{ marginBottom: '1rem' }}>
+                <label className="field-label">{WORKFLOW_ROLE_LABELS[role] || role} Model</label>
                 <select
                   className="default-select"
-                  value={formData.planner}
-                  onChange={(e) => setFormData({ ...formData, planner: e.target.value })}
+                  value={formData[role] || ''}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, [role]: event.target.value }))}
                   required
                 >
-                  <option value="">Select planner model...</option>
-                  {providerModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
+                  <option value="">Select {role} model...</option>
+                  {providerModels.map((model) => <option key={model} value={model}>{model}</option>)}
                 </select>
-              </div>}
-
-              {workflowRoles.has('executor') && <div style={{ marginBottom: '1rem' }}>
-                <label className="field-label">Executor Model</label>
-                <select
-                  className="default-select"
-                  value={formData.executor}
-                  onChange={(e) => setFormData({ ...formData, executor: e.target.value })}
-                  required
-                >
-                  <option value="">Select executor model...</option>
-                  {providerModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>}
-
-              {workflowRoles.has('reviewer') && <div style={{ marginBottom: '1rem' }}>
-                <label className="field-label">Reviewer Model</label>
-                <select
-                  className="default-select"
-                  value={formData.reviewer}
-                  onChange={(e) => setFormData({ ...formData, reviewer: e.target.value })}
-                  required
-                >
-                  <option value="">Select reviewer model...</option>
-                  {providerModels.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>}
+              </div>)}
             </>
           )}
 
@@ -1246,307 +1160,8 @@ function AgentsTab() {
             </div>
           )}
 
-          <div style={{ marginBottom: '1rem' }}>
-            <label className="field-label">System Prompt</label>
-            <textarea
-              className="key-input"
-              rows={4}
-              value={formData.system_prompt}
-              onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
-            />
-          </div>
+          <p className="field-hint" style={{ marginBottom: "1rem" }}>Workflow nodes own role instructions, tools, inputs, outputs, and transitions. Agent settings supply the provider, model for each role, knowledge bases, and runtime limits.</p>
 
-          <div style={{ marginBottom: '1rem' }}>
-            <label className="field-label">Registered tools enabled for this agent</label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.35rem' }}>
-              {availableAgentTools.map((tool) => <label key={tool} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><input type="checkbox" checked={(formData.tools || []).includes(tool)} onChange={(event) => setFormData((prev) => ({ ...prev, tools: event.target.checked ? [...new Set([...(prev.tools || []), tool])] : (prev.tools || []).filter((name) => name !== tool) }))} />{tool}</label>)}
-            </div>
-            <span className="field-hint">The agent enables these tools; each workflow step can call only the tools assigned to that step.</span>
-          </div>
-
-          <div style={{ marginBottom: '1rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '8px', padding: '1rem' }}>
-            <label className="field-label">How workflow roles are used</label>
-            <div style={{ fontSize: '0.85rem', color: '#555', lineHeight: 1.55, margin: '0.35rem 0 1rem' }}>
-              <p style={{ margin: '0 0 0.5rem' }}><strong>The selected workflow defines the path.</strong> Fixed workflows continue through their configured steps in order. The Dynamic workflow starts with a routing decision, then continues through the selected configured path to completion. Workflows can also include conditional branches.</p>
-              <p style={{ margin: '0 0 0.5rem' }}>Each step selects a role such as Planner, Executor, Reviewer, or Final answer writer. That role’s prompt settings apply only when a step using that role runs; a Reviewer prompt does not cause a review step to be added.</p>
-              <p style={{ margin: 0 }}>The shared System Prompt is included with each step. The workflow step’s instructions and mapped inputs tell that role what to do for this particular task.</p>
-            </div>
-            <label className="field-label">Customize role behavior</label>
-            <p style={{ fontSize: '0.85rem', color: '#666', margin: '0.25rem 0 1rem' }}>
-              Choose a behavior preset and add optional guidance for roles used by this agent’s workflow. Add or remove workflow steps in the Workflows section.
-            </p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-              {AGENT_PROMPT_ROLES.filter(([role]) => workflowRoles.has(role)).map(([role, label, description]) => {
-                const presets = rolePresets[role] || [
-                  { id: 'balanced', name: 'Balanced', description: 'Use the built-in role behavior.' },
-                ];
-                const selectedPreset = formData.role_prompt_presets?.[role] || 'balanced';
-                const selectedInfo = presets.find((preset) => preset.id === selectedPreset);
-                return (
-                  <div key={role} style={{ padding: '0.75rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '6px' }}>
-                    <label className="field-label" htmlFor={`role-preset-${role}`}>{label}</label>
-                    <p style={{ fontSize: '0.78rem', color: '#666', lineHeight: 1.45, minHeight: '3.4em', margin: '0.15rem 0 0.5rem' }}>{description}</p>
-                    <select
-                      id={`role-preset-${role}`}
-                      className="default-select"
-                      value={selectedPreset}
-                      onChange={(e) => setFormData((prev) => ({
-                        ...prev,
-                        role_prompt_presets: { ...(prev.role_prompt_presets || {}), [role]: e.target.value },
-                      }))}
-                    >
-                      {presets.map((preset) => (
-                        <option key={preset.id} value={preset.id}>{preset.name}</option>
-                      ))}
-                    </select>
-                    <span className="field-hint">{selectedInfo?.description || 'Uses the balanced built-in role behavior.'}</span>
-                    <textarea
-                      className="key-input"
-                      rows={2}
-                      style={{ marginTop: '0.5rem' }}
-                      value={formData.role_instructions?.[role] || ''}
-                      onChange={(e) => setFormData((prev) => ({
-                        ...prev,
-                        role_instructions: { ...(prev.role_instructions || {}), [role]: e.target.value },
-                      }))}
-                      placeholder={`Additional ${label.toLowerCase()} guidance (optional)`}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-          
-          {/* Custom Prompts Section */}
-          <div style={{ marginBottom: '1rem', border: '1px solid var(--border, #e5e7eb)', borderRadius: '8px', padding: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-              <label className="field-label" style={{ margin: 0 }}>
-                Full prompt overrides <span style={{ fontSize: '0.75rem', color: '#888', fontWeight: 'normal' }}>(Optional - Advanced)</span>
-              </label>
-              <button
-                type="button"
-                className="btn g small"
-                onClick={() => setShowAdvanced(!showAdvanced)}
-              >
-                {showAdvanced ? 'Hide' : 'Show'}
-              </button>
-            </div>
-            
-            {showAdvanced && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
-                <p style={{ fontSize: '0.85rem', color: '#666', margin: 0 }}>
-                  These advanced fields replace the built-in role prompt and its selected preset. Clear an override to restore the built-in prompt plus role behavior settings.
-                </p>
-                
-                {/* Router Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Router Prompt</label>
-                    {defaultPrompts?.router && (
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#888',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                        onClick={() => setFormData(prev => ({...prev, router_prompt: ''}))}
-                      >
-                        Clear override
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.router_prompt}
-                    onChange={(e) => setFormData({ ...formData, router_prompt: e.target.value })}
-                    placeholder="Decides whether to use direct or plan mode (leave blank for default)"
-                  />
-                </div>
-                
-                {/* Planner Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Planner Prompt</label>
-                    {defaultPrompts?.planner && (
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#888',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                        onClick={() => setFormData(prev => ({...prev, planner_prompt: ''}))}
-                      >
-                        Clear override
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.planner_prompt}
-                    onChange={(e) => setFormData({ ...formData, planner_prompt: e.target.value })}
-                    placeholder="Breaks down complex tasks into steps (leave blank for default)"
-                  />
-                </div>
-                
-                {/* Executor Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Executor Prompt</label>
-                    {defaultPrompts?.executor && (
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#888',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                        onClick={() => setFormData(prev => ({...prev, executor_prompt: ''}))}
-                      >
-                        Clear override
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.executor_prompt}
-                    onChange={(e) => setFormData({ ...formData, executor_prompt: e.target.value })}
-                    placeholder="Executes individual steps (leave blank for default)"
-                  />
-                </div>
-                
-                {/* Reviewer Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Reviewer Prompt</label>
-                    {defaultPrompts?.reviewer && (
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#888',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                        onClick={() => setFormData(prev => ({...prev, reviewer_prompt: ''}))}
-                      >
-                        Clear override
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.reviewer_prompt}
-                    onChange={(e) => setFormData({ ...formData, reviewer_prompt: e.target.value })}
-                    placeholder="Reviews completed steps (leave blank for default)"
-                  />
-                </div>
-                
-                {/* Controller Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Workflow Controller Override</label>
-                    {defaultPrompts?.controller && (
-                      <button
-                        type="button"
-                        style={{ fontSize: '0.75rem', color: '#888', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
-                        onClick={() => setFormData(prev => ({ ...prev, controller_prompt: '' }))}
-                      >Clear override</button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.controller_prompt}
-                    onChange={(e) => setFormData({ ...formData, controller_prompt: e.target.value })}
-                    placeholder="Replace the built-in controller instructions (advanced)"
-                  />
-                </div>
-
-                {/* Direct Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Direct Prompt</label>
-                    {defaultPrompts?.direct && (
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#888',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                        onClick={() => setFormData(prev => ({...prev, direct_prompt: ''}))}
-                      >
-                        Clear override
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.direct_prompt}
-                    onChange={(e) => setFormData({ ...formData, direct_prompt: e.target.value })}
-                    placeholder="Handles simple queries in a single pass (leave blank for default)"
-                  />
-                </div>
-                
-                {/* Finalizer Prompt */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <label style={{ fontSize: '0.875rem', fontWeight: '500' }}>Finalizer Prompt</label>
-                    {defaultPrompts?.finalizer && (
-                      <button
-                        type="button"
-                        style={{
-                          fontSize: '0.75rem',
-                          color: '#888',
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          textDecoration: 'underline'
-                        }}
-                        onClick={() => setFormData(prev => ({...prev, finalizer_prompt: ''}))}
-                      >
-                        Clear override
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="key-input"
-                    rows={3}
-                    value={formData.finalizer_prompt}
-                    onChange={(e) => setFormData({ ...formData, finalizer_prompt: e.target.value })}
-                    placeholder="Composes the final answer (leave blank for default)"
-                  />
-                </div>
-                
-                <div style={{ fontSize: '0.8rem', color: '#666', padding: '0.5rem', backgroundColor: '#f9fafb', borderRadius: '4px' }}>
-                  💡 <strong>Tip:</strong> Built-in tools include get_conversation_history and semantic_search (when a knowledge base is attached), plus store_kv and others.
-                  Mention them in your custom prompts to guide the agent's behavior.
-                </div>
-              </div>
-            )}
-          </div>
-          
           <div className="modal-actions">
             <button type="button" className="btn g" onClick={() => { setIsCreating(false); setEditingAgent(null); }}>
               Cancel
