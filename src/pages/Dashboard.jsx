@@ -67,8 +67,8 @@ function OutputContractField({ value, onChange }) {
     onChange(Object.fromEntries(next.filter(([name]) => name.trim())));
   }
   return <div>
-    <label className="field-label">Output contract: fields the model should return</label>
-    <span className="field-hint">Choose each output key and its type. This describes the model’s result; it is not an input mapping.</span>
+    <label className="field-label">Output JSON format</label>
+    <span className="field-hint">Define the JSON object this step must return. For example, <code>{'{"layout":"object"}'}</code> means the step returns an object with a <code>layout</code> field. These values are types, not data paths.</span>
     <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.4rem' }}>
       {entries.map(([key, type], index) => <div key={`${index}-${key}`} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1fr) minmax(130px, 0.8fr) auto', gap: '0.4rem' }}>
         <input className="key-input" aria-label="Output field name" value={key} placeholder="layout" onChange={(event) => updateEntry(index, event.target.value, type)} />
@@ -109,8 +109,8 @@ function InputMappingField({ value, previousNodes = [], onChange }) {
     onChange(next);
   }
   return <div>
-    <label className="field-label">What this step receives</label>
-    <span className="field-hint">Choose a source for each value the model should see. The first step usually receives the original request; later steps can receive an earlier step’s output.</span>
+    <label className="field-label">Input JSON this step receives</label>
+    <span className="field-hint">Each row creates one key in the JSON sent to the agent. Step 1 starts with <code>{'{"input": "the user request"}'}</code>. Later steps are prefilled with the previous step’s complete output as <code>input</code>.</span>
     <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.4rem' }}>
       {Object.entries(mappings).map(([key, path], index) => {
         const knownPath = sources.some((source) => source.path === path);
@@ -139,7 +139,7 @@ function InputMappingField({ value, previousNodes = [], onChange }) {
         }}>+ Add input</button>
         {previousNodes.length > 0 && <button type="button" className="btn g small" onClick={() => {
           const previous = previousNodes.at(-1);
-          onChange({ ...mappings, request: '$.request', previous_output: `$.steps.${previous.id}.output` });
+          onChange({ input: `$.steps.${previous.id}.output` });
         }}>Add previous step output ({previousNodes.at(-1).name || previousNodes.at(-1).id})</button>}
       </div>
     </div>
@@ -199,8 +199,8 @@ function ToolSchemaField({ value, onChange }) {
 
 function workflowNode(id, name, role) {
   return {
-    id, name, role, type: 'agent', instructions: 'Use the provided input to complete this step. If an assigned tool is needed, call it with arguments matching that tool’s schema and values from the input. Return a JSON object matching the output contract.',
-    input_mapping: { request: '$.request' }, output_schema: { response: 'string' }, tools: [], max_attempts: 1,
+    id, name, role, type: 'agent', instructions: 'Read the JSON input for this step and complete the task described here. Treat values copied from an earlier step as context and continue from that result. Use only tools assigned to this step, with arguments matching their schemas. Return one JSON object matching the Output JSON format below. Do not include markdown or extra text.',
+    input_mapping: { input: '$.request' }, output_schema: { response: 'string' }, tools: [], max_attempts: 1,
   };
 }
 
@@ -293,8 +293,8 @@ function WorkflowsTab() {
     const newNode = {
       ...workflowNode(id, `Step ${nodes.length + 1}`, 'executor'),
       input_mapping: terminal
-        ? { request: '$.request', previous_output: `$.steps.${terminal.id}.output` }
-        : { request: '$.request' },
+        ? { input: `$.steps.${terminal.id}.output` }
+        : { input: '$.request' },
       tools: availableTools.filter((name) => name !== 'semantic_search'),
     };
     if (terminal) edges.push({ from: terminal.id, to: id });
@@ -361,8 +361,8 @@ function WorkflowsTab() {
               <div><label className="field-label">Role behavior</label><select className="default-select" value={node.role} onChange={(e) => updateNode(index, { role: e.target.value })}>{WORKFLOW_ROLES.map((role) => <option key={role} value={role}>{role}</option>)}</select></div>
             </div>
             <label className="field-label" style={{ marginTop: '0.75rem' }}>Instructions for this step</label>
-            <textarea className="key-input" rows={3} value={node.instructions || ''} onChange={(e) => updateNode(index, { instructions: e.target.value })} />
-            <span className="field-hint">Describe the task and what the model should do with its input. Assigned tool schemas tell it which arguments each tool accepts.</span>
+            <textarea className="key-input" rows={3} value={node.instructions || ''} onChange={(e) => updateNode(index, { instructions: e.target.value })} placeholder={'Task: describe what this step must do.\nExplain which input fields to use and how to use the result from the previous step.\nReturn only the JSON fields defined below.'} />
+            <span className="field-hint">Write the task in everyday language: what to do, which input to use, and what result to produce. The JSON input and output format are provided separately. Tool argument schemas are provided automatically for selected tools.</span>
             {node.role === 'finalizer' && <div style={{ marginTop: '0.5rem' }}>
               <label className="field-label">Return mapped input directly (optional)</label>
               <input className="key-input" value={node.return_input || ''} onChange={(e) => updateNode(index, { return_input: e.target.value.trim() || undefined })} placeholder="work" />
@@ -388,7 +388,7 @@ function WorkflowsTab() {
                 {unavailableRefs.map((id) => `“${id}”`).join(', ')} {unavailableRefs.length === 1 ? 'is not an earlier workflow step ID' : 'are not earlier workflow step IDs'}. Available earlier IDs: {[...previousIds].join(', ') || 'none'}. A registered tool with the same name does not create a workflow step.
               </div>}
               <OutputContractField value={node.output_schema} onChange={(output_schema) => updateNode(index, { output_schema })} />
-              <span className="field-hint">Example: <code>{'{"layout":"object"}'}</code>. A later step can choose that output in its input source list.</span>
+              <span className="field-hint">A later step receives this step's returned JSON automatically when you add it. You can change its input source if needed.</span>
               {Object.values(node.output_schema || {}).some((type) => typeof type === 'string' && type.startsWith('$.')) && <div className="field-hint" style={{ color: '#b42318' }}>
                 This output contract contains a path. Put paths in the next step’s input mapping; use a type such as <code>object</code> here.{' '}
                 <button type="button" className="btn g small" onClick={() => updateNode(index, { output_schema: Object.fromEntries(Object.entries(node.output_schema || {}).map(([key, type]) => [key, typeof type === 'string' && type.startsWith('$.') ? 'object' : type])) })}>Replace path values with object</button>
