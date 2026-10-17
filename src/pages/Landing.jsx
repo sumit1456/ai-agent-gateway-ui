@@ -1,4 +1,4 @@
-import BlackholeImproved from '../components/BlackholeImproved';
+import BlackholeGargantua from '../components/BlackholeGargantua';
 import BlackHoleParticleField from '../components/BlackHoleParticleField';
 import Footer from '../components/Footer';
 import Reveal from '../components/Reveal';
@@ -86,24 +86,36 @@ export default function Landing() {
   return (
     <>
       <header className="hero">
-        <BlackholeImproved className="hero-blackhole" />
-        <div className="wrap">
-          <span className="tag">Agent Gateway · Early Access</span>
-          <h1>
-            Send your agents past the <span>event horizon</span>
-          </h1>
-          <p className="sub">
-            Register agents, set their initial config, and call one API. We run the architecture,
-            orchestration and pipeline underneath — you ship the product.
-          </p>
-          <div className="cta">
-            <a className="btn p" href="#/register">
-              Get early access
-            </a>
-            <a className="btn g" href="#api">
-              See the API
-            </a>
+        <BlackholeGargantua
+          className="hero-blackhole"
+          positionX={() => (window.innerWidth <= 820 ? 0.52 : 0.995)}
+        />
+        <div className="wrap hero-layout">
+          <div className="hero-copy">
+            <span className="tag"><i /> Agent Gateway <b>·</b> Early Access</span>
+            <h1>
+              Send your agents <span>past the event horizon.</span>
+            </h1>
+            <p className="sub">
+              One API for agent workflows, tools, and run visibility. Bring your models and product logic;
+              let the gateway handle orchestration.
+            </p>
+            <div className="cta">
+              <a className="btn p" href="#/register">
+                Get early access <span aria-hidden="true">↗</span>
+              </a>
+              <a className="btn g" href="#api">
+                Explore the API
+              </a>
+            </div>
+            <div className="hero-capabilities" aria-label="Gateway capabilities">
+              <span><i /> Workflow control</span>
+              <span><i /> Your tools and models</span>
+              <span><i /> Inspectable runs</span>
+            </div>
           </div>
+          <div className="hero-art-label"><span className="hero-art-dot" /> ORCHESTRATION, IN MOTION</div>
+          <a className="hero-scroll" href="#how"><span /> Scroll to explore</a>
         </div>
       </header>
 

@@ -46,7 +46,7 @@ const ACTIVE_RENDER_QUALITY = RENDER_QUALITY[getRenderMode()];
 const MAX_PIXEL_RATIO = ACTIVE_RENDER_QUALITY.pixelRatio; // lower values shade fewer pixels
 
 // ---- Black hole size & position -----------------------------------------------
-const BLACK_HOLE_RADIUS = 0.3;              // ★ BLACK HOLE RADIUS / SIZE: this x min(0.8 x canvas width, canvas height).
+const BLACK_HOLE_RADIUS = 0.4;              // ★ BLACK HOLE RADIUS / SIZE: this x min(0.8 x canvas width, canvas height).
 //   Same rule as the canvas version (hr = Math.min(W * 0.8, H) * 0.02): 0.02 here = the same radius as 0.02 there.
 //   Rings, distortion halo and planet size scale with it. To make everything smaller you can also just shrink the canvas in CSS.
 const BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION = 0.8; // the 0.8 in the rule above
@@ -239,6 +239,8 @@ uniform vec2 R;
 uniform float T;
 uniform float Z;
 uniform vec2 HP;
+uniform float A;
+uniform float TB;
 ${PLANET_UNIFORMS_GLSL}
 const float TAU=${glslFloat(6.2831853)};
 const float RIN=${glslFloat(RING_INNER_RADIUS)},ROUT=${glslFloat(DISK_OUTER_RADIUS)};
@@ -267,6 +269,8 @@ vec3 ramp(float k){
  return mix(c,${glslVec3(DISK_COLOR_WHITE_HOT)},smoothstep(.85,1.,k));}
 void main(){
  vec2 uv=(gl_FragCoord.xy-R*HP)/(R.x*Z);
+ float ca=cos(A),sa=sin(A);
+ uv=mat2(ca,-sa,sa,ca)*uv;
  float el=${glslFloat(CAMERA_TILT_RADIANS)};
  vec3 ro=${glslFloat(CAMERA_DISTANCE)}*vec3(0.,sin(el),-cos(el));
  vec3 fw=-normalize(ro),rt=normalize(cross(vec3(0,1,0),fw)),up=cross(fw,rt);
@@ -304,16 +308,33 @@ void main(){
  }
  ${ESCAPED_RAY_GLSL}
  col=1.-exp(-col*${glslFloat(DISK_EXPOSURE)});
- vec3 outc=col+${glslVec3(SPACE_TINT_COLOR)}*tr;
+ vec3 outc=col+${glslVec3(SPACE_TINT_COLOR)}*tr*(1.0-TB);
 ${PLANET_GLSL}
- gl_FragColor=vec4(outc,1.);
+ float alpha=mix(1.0,esc?1.0-exp(-max(max(outc.r,outc.g),outc.b)*3.0):1.0,TB);
+ gl_FragColor=vec4(outc*alpha,alpha);
 }
 `;
 
 // One <canvas id="bh" className={className}> — same shape as the canvas version, so any CSS you wrote
 // for that one (#bh, .your-class, width / height / position) works here unchanged.
-export default function BlackholeImproved({ className = '', id = 'bh', style } = {}) {
+export default function BlackholeImproved({
+  className = '',
+  id = 'bh',
+  style,
+  positionX = BLACK_HOLE_POSITION_X_FRACTION,
+  positionY,
+  rotation = 0,
+  transparentBackground = false,
+} = {}) {
   const canvasRef = useRef(null);
+  const positionXRef = useRef(positionX);
+  const positionYRef = useRef(positionY);
+  const rotationRef = useRef(rotation);
+  const transparentBackgroundRef = useRef(transparentBackground);
+  positionXRef.current = positionX;
+  positionYRef.current = positionY;
+  rotationRef.current = rotation;
+  transparentBackgroundRef.current = transparentBackground;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -366,6 +387,8 @@ export default function BlackholeImproved({ className = '', id = 'bh', style } =
     const uTime = gl.getUniformLocation(program, 'T');
     const uZoom = gl.getUniformLocation(program, 'Z');
     const uHolePosition = gl.getUniformLocation(program, 'HP');
+    const uRotation = gl.getUniformLocation(program, 'A');
+    const uTransparentBackground = gl.getUniformLocation(program, 'TB');
     const uPlanets = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'PL') : null;
     const uLitColors = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'PA') : null;
     const uShadowColors = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'PB') : null;
@@ -431,11 +454,13 @@ export default function BlackholeImproved({ className = '', id = 'bh', style } =
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
       gl.viewport(0, 0, w, h);
-      holeFractionX = BLACK_HOLE_POSITION_X_FRACTION;
-      holeFractionY =
+      const targetPositionX = typeof positionXRef.current === 'function' ? positionXRef.current(canvasWidth) : positionXRef.current;
+      holeFractionX = Math.max(0.1, Math.min(0.995, targetPositionX));
+      holeFractionY = positionYRef.current ?? (
         canvasWidth < NARROW_CANVAS_MAX_WIDTH_PX
           ? BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW
-          : BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION;
+          : BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION
+      );
       holeX = canvasWidth * holeFractionX;
       holeY = canvasHeight * (1 - holeFractionY);
       // one rule for everything: black hole radius in css px = BLACK_HOLE_RADIUS x min(width x 0.8, height)
@@ -516,12 +541,23 @@ export default function BlackholeImproved({ className = '', id = 'bh', style } =
 
       const step = delta * (prefersReducedMotion ? 0.1 : 1);
       elapsedSeconds += step;
+      const targetPositionX = typeof positionXRef.current === 'function' ? positionXRef.current(canvasWidth) : positionXRef.current;
+      holeFractionX = Math.max(0.1, Math.min(0.995, targetPositionX));
+      holeFractionY = positionYRef.current ?? (
+        canvasWidth < NARROW_CANVAS_MAX_WIDTH_PX
+          ? BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW
+          : BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION
+      );
+      holeX = canvasWidth * holeFractionX;
+      holeY = canvasHeight * (1 - holeFractionY);
       updatePlanets(step);
 
       gl.uniform2f(uResolution, canvas.width, canvas.height);
       gl.uniform1f(uTime, elapsedSeconds);
       gl.uniform1f(uZoom, zoomValue);
       gl.uniform2f(uHolePosition, holeFractionX, holeFractionY);
+      gl.uniform1f(uRotation, (rotationRef.current * Math.PI) / 180);
+      gl.uniform1f(uTransparentBackground, transparentBackgroundRef.current ? 1 : 0);
       if (PLANET_COUNT > 0) {
         gl.uniform4fv(uPlanets, planetData);
         gl.uniform3fv(uLitColors, litData);
