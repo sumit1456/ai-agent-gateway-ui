@@ -27,6 +27,8 @@ async function request(path, { method = 'GET', body, auth = false, headers: extr
         ? data.detail
         : Array.isArray(data.detail)
         ? data.detail.map((d) => d.msg || JSON.stringify(d)).join(', ')
+        : data.detail && typeof data.detail === 'object'
+        ? [data.detail.message, ...(data.detail.errors || [])].filter(Boolean).join(': ')
         : `Request failed (${res.status})`;
     const error = new Error(detail);
     error.status = res.status;
@@ -136,6 +138,10 @@ export function listWorkflows() {
 
 export function createWorkflow(payload) {
   return request('/v1/workflows/', { method: 'POST', auth: true, body: payload });
+}
+
+export function generateConfigurationDraft(payload) {
+  return request('/v1/workflows/generate-draft', { method: 'POST', auth: true, body: payload });
 }
 
 export function createWorkflowFromPreset(presetId) {

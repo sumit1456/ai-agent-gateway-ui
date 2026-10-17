@@ -1,23 +1,20 @@
 import { useState } from 'react';
 import Footer from '../components/Footer';
 import Particles from '../components/Particles';
-import { login } from '../api';
+import { useLogin } from '../hooks/useAuth';
 import './Login.css';
 
-export default function Login({ onLogin }) {
+export default function Login() {
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy]         = useState(false);
   const [message, setMessage]   = useState(null);
+  const loginMutation = useLogin();
 
   async function onSubmit(e) {
     e.preventDefault();
-    setBusy(true);
     setMessage(null);
     try {
-      const data = await login(email.trim(), password);
-      // Store user data (with API key if provided)
-      onLogin(data);
+      const data = await loginMutation.mutateAsync({ email: email.trim(), password });
       
       const msg = data.is_new_key 
         ? 'Logged in successfully. Your first API key has been created.' 
@@ -34,8 +31,6 @@ export default function Login({ onLogin }) {
       }, 800);
     } catch (err) {
       setMessage({ kind: 'error', text: err.message });
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -89,8 +84,8 @@ export default function Login({ onLogin }) {
               />
             </div>
 
-            <button type="submit" className="auth-submit" disabled={busy}>
-              {busy ? <span className="btn-spinner" /> : 'Log in'}
+            <button type="submit" className="auth-submit" disabled={loginMutation.isPending}>
+              {loginMutation.isPending ? <span className="btn-spinner" /> : 'Log in'}
             </button>
           </form>
 

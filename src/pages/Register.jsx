@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import Footer from '../components/Footer';
 import Particles from '../components/Particles';
-import { register } from '../api';
+import { useRegister } from '../hooks/useAuth';
 import './Register.css';
 
-export default function Register({ loggedIn, user, onLogin }) {
+export default function Register() {
   const [form, setForm] = useState({
     name: '',
     username: '',
@@ -13,8 +13,8 @@ export default function Register({ loggedIn, user, onLogin }) {
     password: '',
     confirmPassword: '',
   });
-  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
+  const registerMutation = useRegister();
 
   const set = (field) => (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
 
@@ -24,11 +24,10 @@ export default function Register({ loggedIn, user, onLogin }) {
       setMessage({ kind: 'error', text: 'Passwords do not match.' });
       return;
     }
-    setBusy(true);
     setMessage(null);
 
     try {
-      const data = await register({
+      await registerMutation.mutateAsync({
         name: form.name.trim(),
         username: form.username.trim(),
         email: form.email.trim(),
@@ -43,18 +42,6 @@ export default function Register({ loggedIn, user, onLogin }) {
       }, 1500);
     } catch (err) {
       setMessage({ kind: 'error', text: err.message });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function copyKey() {
-    try {
-      await navigator.clipboard.writeText(apiKey);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* fallback: select the text */
     }
   }
 
@@ -173,8 +160,8 @@ export default function Register({ loggedIn, user, onLogin }) {
               </div>
             </div>
 
-            <button type="submit" className="auth-submit" disabled={busy}>
-              {busy ? <span className="btn-spinner" /> : 'Create account'}
+            <button type="submit" className="auth-submit" disabled={registerMutation.isPending}>
+              {registerMutation.isPending ? <span className="btn-spinner" /> : 'Create account'}
             </button>
           </form>
 

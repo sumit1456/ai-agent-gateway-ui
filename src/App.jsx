@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import './App.css';
 import Landing from './pages/Landing';
 import Login    from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import Nav from './components/Nav';
+import { useAuthUser } from './hooks/useAuth';
 
 function parseHash() {
   const raw = window.location.hash.replace(/^#/, '');
@@ -14,27 +16,16 @@ function parseHash() {
 
 function App() {
   const [route, setRoute] = useState(() => parseHash().route);
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [user, setUser] = useState(null);
+  const { data: user, isLoading: authLoading } = useAuthUser();
+  const queryClient = useQueryClient();
+  const loggedIn = !!user;
 
-  // Check session storage on mount
+  // Redirect authenticated users away from auth pages
   useEffect(() => {
-    const stored = window.sessionStorage.getItem('agentgateway_user');
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        setUser(parsed);
-        setLoggedIn(true);
-        // If logged in and on auth pages, redirect to home
-        if (route === '/login' || route === '/register') {
-          window.location.hash = '#/';
-        }
-      } catch (e) {
-        console.error('Failed to parse session user', e);
-        window.sessionStorage.clear();
-      }
+    if (loggedIn && (route === '/login' || route === '/register')) {
+      window.location.hash = '#/';
     }
-  }, []); // Only check on mount - don't override user's navigation to dashboard etc.
+  }, [loggedIn, route]);
 
   useEffect(() => {
     document.documentElement.classList.add('js');
@@ -56,35 +47,32 @@ function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  const handleLogin = (userData) => {
-    setUser(userData);
-    setLoggedIn(true);
-    window.sessionStorage.setItem('agentgateway_user', JSON.stringify(userData));
-    // Optionally redirect to home after login
-    if (route !== '/') {
-      window.location.hash = '#/';
-    }
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setLoggedIn(false);
-    window.sessionStorage.clear();
-    // Redirect to home after logout
+  const handleLogout = async () => {
+    // Clear session storage
+    window.sessionStorage.removeItem('agentgateway_user');
+    // Clear all queries from cache
+    await queryClient.invalidateQueries();
+    queryClient.clear();
+    // Redirect to home
     window.location.hash = '#/';
   };
+
+  // Show loading state while checking auth
+  if (authLoading) {
+    return <div className="auth-loading">Loading...</div>;
+  }
 
   return (
     <>
       {/* Show the global nav on all pages */}
-      <Nav loggedIn={loggedIn} user={user} onLogin={handleLogin} onLogout={handleLogout} />
+      <Nav loggedIn={loggedIn} user={user} onLogout={handleLogout} />
 
       {route.startsWith('/dashboard') ? (
         <Dashboard loggedIn={loggedIn} user={user} onLogout={handleLogout} />
       ) : route.startsWith('/register') ? (
-        <Register loggedIn={loggedIn} user={user} onLogin={handleLogin} />
+        <Register loggedIn={loggedIn} user={user} />
       ) : route.startsWith('/login') ? (
-        <Login loggedIn={loggedIn} user={user} onLogin={handleLogin} />
+        <Login loggedIn={loggedIn} user={user} />
       ) : (
         <Landing />
       )}

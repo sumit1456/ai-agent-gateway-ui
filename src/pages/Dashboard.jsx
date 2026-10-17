@@ -1,40 +1,45 @@
 import { useEffect, useState } from 'react';
 import {
-  addProvider,
-  deleteProvider,
   getToken,
-  listConfiguredProviders,
-  listProviderCatalog,
-  updateProvider,
-  listAgents,
-  createAgent,
-  updateAgent,
-  deleteAgent,
-  listWorkflowPresets,
-  listWorkflows,
-  createWorkflow,
-  createWorkflowFromPreset,
-  updateWorkflow,
-  deleteWorkflow,
-  listRuns,
   getRun,
-  listCustomTools,
-  createCustomTool,
-  updateCustomTool,
-  deleteCustomTool,
-  testCustomTool,
-  listBuiltinTools,
-  listKnowledgeBases,
-  createKnowledgeBase,
-  updateKnowledgeBase,
-  deleteKnowledgeBase,
-  createApiKey,
-  listApiKeys,
   runAgent,
   streamRun,
 } from '../api';
 import { useProviderModels } from '../hooks/useProviderModels';
 import { useQueryClient } from '@tanstack/react-query';
+import {
+  useAgents,
+  useWorkflows,
+  useWorkflowPresets,
+  useProviders,
+  useProviderCatalog,
+  useRuns,
+  useRun,
+  useCustomTools,
+  useBuiltinTools,
+  useKnowledgeBases,
+  useApiKeys,
+  useCreateAgent,
+  useUpdateAgent,
+  useDeleteAgent,
+  useCreateWorkflow,
+  useUpdateWorkflow,
+  useDeleteWorkflow,
+  useCreateWorkflowFromPreset,
+  useGenerateWorkflowDraft,
+  useAddProvider,
+  useUpdateProvider,
+  useDeleteProvider,
+  useCreateCustomTool,
+  useUpdateCustomTool,
+  useDeleteCustomTool,
+  useTestCustomTool,
+  useCreateApiKey,
+  useCreateKnowledgeBase,
+  useUpdateKnowledgeBase,
+  useDeleteKnowledgeBase,
+} from '../hooks/useApi';
+import { usePageState } from '../hooks/usePaginationState';
 import './Dashboard.css';
 
 const WORKFLOW_ROLES = ['planner', 'executor', 'reviewer', 'finalizer', 'direct', 'router', 'controller'];
@@ -140,34 +145,70 @@ function findStepReferences(mapping) {
 }
 
 function WorkflowsTab() {
-  const [presets, setPresets] = useState([]);
-  const [workflows, setWorkflows] = useState([]);
-  const [availableTools, setAvailableTools] = useState([]);
+  // Use React Query hooks for automatic caching and refetching
+  const { data: presets = [], isLoading: presetsLoading } = useWorkflowPresets();
+  const { data: workflows = [], isLoading: workflowsLoading } = useWorkflows();
+  const { data: customTools = [] } = useCustomTools();
+  const { data: builtinToolsData } = useBuiltinTools();
+  const { data: providers = [] } = useProviders();
+  
+  const builtinTools = builtinToolsData?.builtin_tools || [];
+  
+  // Compute available tools from custom and builtin tools
+  const availableTools = [
+    ...builtinTools.filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
+    ...customTools.map((tool) => tool.name),
+  ];
+  
+  // Mutation hooks for write operations
+  const createWorkflowMutation = useCreateWorkflow();
+  const updateWorkflowMutation = useUpdateWorkflow();
+  const deleteWorkflowMutation = useDeleteWorkflow();
+  const createFromPresetMutation = useCreateWorkflowFromPreset();
+  const generateDraftMutation = useGenerateWorkflowDraft();
+  
   const [editing, setEditing] = useState(null);
   const [advanced, setAdvanced] = useState(false);
   const [jsonDraft, setJsonDraft] = useState('');
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [builderBrief, setBuilderBrief] = useState('');
+  const [builderProviderId, setBuilderProviderId] = useState('');
+  const [builderModel, setBuilderModel] = useState('');
+  const [builderMeta, setBuilderMeta] = useState(null);
   const [notice, setNotice] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  
+  const loading = presetsLoading || workflowsLoading;
+  const saving = createWorkflowMutation.isPending || updateWorkflowMutation.isPending;
+  const builderBusy = generateDraftMutation.isPending;
+  
+  const builderProvider = providers.find((provider) => provider.id === builderProviderId);
+  const builderModels = Array.from(new Set([...(builderProvider?.enabled_models || []), builderProvider?.default_model].filter(Boolean)));
 
-  async function load() {
-    setLoading(true);
-    try {
-      const [presetRows, workflowRows, customTools, builtinTools] = await Promise.all([listWorkflowPresets(), listWorkflows(), listCustomTools(), listBuiltinTools()]);
-      setPresets(presetRows);
-      setWorkflows(workflowRows);
-      const registeredTools = [
-        ...builtinTools.builtin_tools.filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
-        ...customTools.map((tool) => tool.name),
-      ];
-      setAvailableTools(registeredTools);
-      return registeredTools;
-    } catch (err) {
-      setNotice({ message: err.message, kind: 'error' });
-      return [];
-    } finally { setLoading(false); }
+  useEffect(() => {
+    if (!builderProvider) return;
+    setBuilderModel((current) => builderModels.includes(current) ? current : builderProvider.default_model || builderModels[0] || '');
+  }, [builderProviderId, builderProvider?.default_model]);
+
+  async function generateWorkflow(kind = 'workflow') {
+    if (!builderBrief.trim() || !builderProviderId || !builderModel) return;
+    setNotice(null);
+    generateDraftMutation.mutate(
+      { kind, brief: builderBrief.trim(), provider_id: builderProviderId, model: builderModel },
+      {
+        onSuccess: (draft) => {
+          const generated = { name: draft.workflow_name, description: draft.workflow_description, definition: draft.workflow };
+          setEditing(generated);
+          setJsonDraft(JSON.stringify(draft.workflow, null, 2));
+          setAdvanced(false);
+          setBuilderMeta(draft);
+          setNotice({ kind: 'success', message: 'Generated an editable workflow draft. Review and save it when ready.' });
+        },
+        onError: (err) => {
+          setNotice({ kind: 'error', message: err.message });
+        }
+      }
+    );
   }
-  useEffect(() => { load(); }, []);
 
   function startCustom() {
     const definition = {
@@ -179,20 +220,24 @@ function WorkflowsTab() {
     setJsonDraft(JSON.stringify(definition, null, 2));
     setAdvanced(false);
   }
+  
   async function choosePreset(preset) {
-    try {
-      const workflow = await createWorkflowFromPreset(preset.id);
-      const registeredTools = await load();
-      const definition = {
-        ...workflow.definition,
-        nodes: workflow.definition.nodes.map((node) => ['executor', 'direct'].includes(node.role)
-          ? { ...node, tools: [...new Set([...(node.tools || []), ...registeredTools])] }
-          : node),
-      };
-      const editableWorkflow = { ...workflow, definition };
-      setEditing(editableWorkflow);
-      setJsonDraft(JSON.stringify(definition, null, 2));
-    } catch (err) { setNotice({ message: err.message, kind: 'error' }); }
+    createFromPresetMutation.mutate(preset.id, {
+      onSuccess: (workflow) => {
+        const definition = {
+          ...workflow.definition,
+          nodes: workflow.definition.nodes.map((node) => ['executor', 'direct'].includes(node.role)
+            ? { ...node, tools: [...new Set([...(node.tools || []), ...availableTools])] }
+            : node),
+        };
+        const editableWorkflow = { ...workflow, definition };
+        setEditing(editableWorkflow);
+        setJsonDraft(JSON.stringify(definition, null, 2));
+      },
+      onError: (err) => {
+        setNotice({ message: err.message, kind: 'error' });
+      }
+    });
   }
   function updateNode(index, patch) {
     const definition = { ...editing.definition, nodes: [...editing.definition.nodes] };
@@ -229,22 +274,35 @@ function WorkflowsTab() {
     setEditing({ ...editing, definition });
     setJsonDraft(JSON.stringify(definition, null, 2));
   }
-  async function saveWorkflow(event) {
+  function saveWorkflow(event) {
     event.preventDefault();
-    setSaving(true);
+    setNotice(null);
+    
     try {
       let definition = editing.definition;
       if (advanced) definition = JSON.parse(jsonDraft);
       const payload = { name: editing.name, description: editing.description, definition };
-      const saved = editing.version_id
-        ? await updateWorkflow(editing.id, payload)
-        : await createWorkflow(payload);
-      setEditing(saved);
-      setJsonDraft(JSON.stringify(saved.definition, null, 2));
-      await load();
-      setNotice({ message: 'Workflow saved as a new version.', kind: 'success' });
-    } catch (err) { setNotice({ message: err.message, kind: 'error' }); }
-    finally { setSaving(false); }
+      
+      const mutation = editing.version_id ? updateWorkflowMutation : createWorkflowMutation;
+      const mutationPayload = editing.version_id 
+        ? { workflowId: editing.id, payload }
+        : payload;
+      
+      mutation.mutate(mutationPayload, {
+        onSuccess: (saved) => {
+          setEditing(saved);
+          setJsonDraft(JSON.stringify(saved.definition, null, 2));
+          setBuilderMeta(null);
+          setNotice({ message: 'Workflow saved as a new version.', kind: 'success' });
+        },
+        onError: (err) => {
+          setNotice({ message: err.message, kind: 'error' });
+        }
+      });
+    } catch (err) {
+      // JSON parse error
+      setNotice({ message: err.message, kind: 'error' });
+    }
   }
 
   if (loading) return <div className="providers-status">Loading workflows…</div>;
@@ -260,6 +318,7 @@ function WorkflowsTab() {
         <input className="key-input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
         <label className="field-label" style={{ marginTop: '0.75rem' }}>Description</label>
         <input className="key-input" value={editing.description || ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
+        {builderMeta && <div className="workflow-draft-notes"><strong>AI generated draft — review and edit before saving</strong><span>Generated with {builderModel} via {builderProvider?.provider_id}. No workflow or agent has been saved yet.</span>{builderMeta.agent && <span>Suggested agent: <strong>{builderMeta.agent.name}</strong> — {builderMeta.agent.purpose}</span>}{[...(builderMeta.assumptions || []), ...(builderMeta.questions || []), ...(builderMeta.setup_notes || [])].length > 0 && <ul>{[...(builderMeta.assumptions || []).map((item) => `Assumption: ${item}`), ...(builderMeta.questions || []).map((item) => `Question: ${item}`), ...(builderMeta.setup_notes || []).map((item) => `Setup: ${item}`)].map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>}
         <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
           {editing.definition.nodes.map((node, index) => {
             const previousNodes = editing.definition.nodes.slice(0, index);
@@ -339,45 +398,100 @@ function WorkflowsTab() {
         <li>Starter workflows are copied to your account so you can customize them.</li>
       </ul>
       <button className="btn p" onClick={startCustom} style={{ marginBottom: '1rem' }}>+ Create custom workflow</button>
+      <section className="workflow-ai-builder">
+        <div className="workflow-ai-builder-heading"><div><h3>Generate a workflow with AI</h3><p className="field-hint">Describe what you need. AI will fill this workflow editor with a draft you can change before saving.</p></div><button type="button" className="btn g" onClick={() => setBuilderOpen((open) => !open)}>{builderOpen ? 'Close' : 'Create from a brief'}</button></div>
+        {builderOpen && <div className="workflow-ai-builder-form">
+          {!providers.length ? <p className="field-hint">Configure a provider and select at least one model in Providers before generating a draft.</p> : <>
+            <label className="field-label">Configured provider</label>
+            <select className="default-select" value={builderProviderId} onChange={(event) => { setBuilderProviderId(event.target.value); setBuilderModel(''); }}><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.provider_id}</option>)}</select>
+            {builderProvider && <><label className="field-label">Model to generate the draft</label><select className="default-select" value={builderModel} onChange={(event) => setBuilderModel(event.target.value)}><option value="">Choose model</option>{builderModels.map((model) => <option key={model} value={model}>{model}</option>)}</select></>}
+            <label className="field-label">What should this workflow do?</label><textarea className="key-input" rows={5} value={builderBrief} onChange={(event) => setBuilderBrief(event.target.value)} placeholder="Describe the request it handles, steps it should take, tools it might need, and the final result you expect." />
+            <button type="button" className="btn p" onClick={() => generateWorkflow('workflow')} disabled={builderBusy || !builderProviderId || !builderModel || builderBrief.trim().length < 10}>{builderBusy ? 'Generating draft…' : 'Generate workflow draft'}</button>
+          </>}
+        </div>}
+      </section>
       <h3>Starter workflows</h3>
       <div className="provider-grid">{presets.map((preset) => <article key={preset.id} className="provider-card">
-        <h4>{preset.name}</h4><p>{preset.description}</p><button className="btn g small" onClick={() => choosePreset(preset)}>Use this workflow</button>
+        <h4>{preset.name}</h4><p>{preset.description}</p>
+        <details className="workflow-preset-prompts"><summary>View step prompts ({preset.definition.nodes.length})</summary>
+          <div className="workflow-preset-prompt-list">{preset.definition.nodes.map((node, index) => <div className="workflow-preset-prompt" key={node.id}>
+            <strong>{index + 1}. {node.name} <span>({node.role})</span></strong>
+            <p>{node.instructions}</p>
+          </div>)}</div>
+          <span className="field-hint">To customize these prompts, use this workflow. Its step instructions will open in the editor before you save it.</span>
+        </details>
+        <button className="btn g small" onClick={() => choosePreset(preset)}>Use and configure prompts</button>
       </article>)}</div>
       <h3 style={{ marginTop: '2rem' }}>Your workflows</h3>
       {!workflows.length ? <p>No saved workflows yet.</p> : <div className="provider-grid">{workflows.map((workflow) => <article key={workflow.id} className="provider-card">
         <h4>{workflow.name}</h4><p>{workflow.description}</p><small>Version {workflow.version} · {workflow.definition.nodes.length} steps</small>
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}><button className="btn g small" onClick={() => { setEditing(workflow); setJsonDraft(JSON.stringify(workflow.definition, null, 2)); }}>Edit</button><button className="btn g small" onClick={async () => { if (window.confirm('Delete this workflow? Agents currently using it will be reassigned to your Dynamic default workflow. Existing run history and its workflow snapshot will be kept.')) { try { const result = await deleteWorkflow(workflow.id); await load(); setNotice({ kind: 'success', message: result.agents_reassigned ? `${result.agents_reassigned} agent(s) reassigned to ${result.default_workflow_name}. Run history was preserved.` : 'Workflow deleted. Run history was preserved.' }); } catch (err) { setNotice({ message: err.message, kind: 'error' }); } } }}>Delete</button></div>
+        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+          <button className="btn g small" onClick={() => { setEditing(workflow); setJsonDraft(JSON.stringify(workflow.definition, null, 2)); }}>Edit</button>
+          <button className="btn g small" onClick={() => { 
+            if (window.confirm('Delete this workflow? Agents currently using it will be reassigned to your Dynamic default workflow. Existing run history and its workflow snapshot will be kept.')) { 
+              deleteWorkflowMutation.mutate(workflow.id, {
+                onSuccess: (result) => {
+                  setNotice({ 
+                    kind: 'success', 
+                    message: result.agents_reassigned 
+                      ? `${result.agents_reassigned} agent(s) reassigned to ${result.default_workflow_name}. Run history was preserved.` 
+                      : 'Workflow deleted. Run history was preserved.' 
+                  });
+                },
+                onError: (err) => {
+                  setNotice({ message: err.message, kind: 'error' });
+                }
+              });
+            } 
+          }}>Delete</button>
+        </div>
       </article>)}</div>}
     </>}
   </>;
 }
 
 function RunsTab() {
-  const [runs, setRuns] = useState([]);
-  const [selectedRun, setSelectedRun] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    listRuns().then((data) => setRuns(data.runs || [])).catch((err) => setError(err.message)).finally(() => setLoading(false));
-  }, []);
-  async function openRun(runId) {
-    try { setSelectedRun(await getRun(runId)); setError(''); }
-    catch (err) { setError(err.message); }
+  // Use React Query hooks for automatic caching and refetching
+  const { data: runsData, isLoading, isFetching, error, refetch: refetchRuns } = useRuns(100);
+  const runs = runsData?.runs || [];
+  
+  // Persist selected run ID across navigation
+  const { state, setState } = usePageState('runs', {
+    selectedRunId: null,
+  });
+  
+  // Fetch selected run details (only when a run is selected)
+  const { data: selectedRun, isLoading: runLoading, isFetching: runFetching, error: runError, refetch: refetchRun } = useRun(state.selectedRunId);
+  
+  function openRun(runId) {
+    setState({ selectedRunId: runId });
   }
-  if (loading) return <div className="providers-status">Loading runs…</div>;
+
+  function refreshRuns() {
+    refetchRuns();
+    if (state.selectedRunId) refetchRun();
+  }
+  
+  if (isLoading) return <div className="providers-status">Loading runs…</div>;
+  if (error) return <div className="tab-notice error">{error.message}</div>;
+  
   return <>
-    <p className="providers-intro">Inspect how a workflow ran, including step inputs and outputs, failures, and timing.</p>
-    {error && <div className="tab-notice error">{error}</div>}
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+      <p className="providers-intro">Inspect workflow steps, inputs and outputs, failures, token usage, and timing for each run.</p>
+      <button type="button" className="btn g small" onClick={refreshRuns} disabled={isFetching || runFetching}>{isFetching || runFetching ? 'Refreshing…' : 'Refresh runs'}</button>
+    </div>
+    {runError && <div className="tab-notice error" role="alert">Could not load this run: {runError.message} <button type="button" className="btn g small" onClick={() => refetchRun()}>Retry</button></div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)', gap: '1rem' }}>
       <div style={{ display: 'grid', alignContent: 'start', gap: '0.5rem' }}>
         {!runs.length && <p>No runs found.</p>}
-        {runs.map((run) => <button key={run.id} className="btn g" onClick={() => openRun(run.id)} style={{ textAlign: 'left' }}>
+        {runs.map((run) => <button key={run.id} className="btn g" aria-pressed={state.selectedRunId === run.id} onClick={() => openRun(run.id)} style={{ textAlign: 'left', borderColor: state.selectedRunId === run.id ? 'var(--accent, #6467f2)' : undefined }}>
           <strong>{run.status}</strong><br /><small>{new Date(run.created_at).toLocaleString()} · {run.id.slice(0, 8)}</small>
+          <br /><small>{run.tokens_used ?? '—'} tokens · {run.duration_ms == null ? '—' : `${run.duration_ms} ms`}</small>
         </button>)}
       </div>
-      {selectedRun ? <section style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '1rem', minWidth: 0 }}>
+      {runLoading ? <div className="empty-state"><h3>Loading run details…</h3></div> : selectedRun ? <section style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '1rem', minWidth: 0 }}>
         <h3 style={{ marginTop: 0 }}>Run details</h3>
-        <p><strong>Status:</strong> {selectedRun.status} · <strong>Tokens:</strong> {selectedRun.tokens_used} · <strong>Duration:</strong> {selectedRun.duration_ms} ms</p>
+        <p><strong>Status:</strong> {selectedRun.status}{runFetching && ' · Updating…'} · <strong>Tokens:</strong> {selectedRun.tokens_used ?? 'not recorded'} · <strong>Duration:</strong> {selectedRun.duration_ms == null ? 'not finished' : `${selectedRun.duration_ms} ms`}</p>
         <p><strong>Request</strong></p><pre style={{ whiteSpace: 'pre-wrap' }}>{selectedRun.input}</pre>
         <h4>Executed workflow steps</h4>
         {(selectedRun.workflow_transitions || []).length > 0 && <ol>{selectedRun.workflow_transitions.map((transition, index) => <li key={`${transition.from}-${index}`}>{transition.from} → {transition.to}{transition.condition ? ` when ${JSON.stringify(transition.condition)}` : ''}</li>)}</ol>}
@@ -419,42 +533,21 @@ function providerInitials(name) {
 }
 
 function ProvidersTab() {
-  const [catalog, setCatalog] = useState([]);
-  const [configured, setConfigured] = useState({});
-  const [status, setStatus] = useState('loading'); // loading | ready | error | anon
-  const [error, setError] = useState(null);
+  // Use React Query hooks for automatic caching
+  const { data: catalog = [], isLoading: catalogLoading, error: catalogError } = useProviderCatalog();
+  const { data: configuredProviders = [], isLoading: providersLoading, error: providersError, refetch } = useProviders();
+  
   const [activeProvider, setActiveProvider] = useState(null);
   const [notice, setNotice] = useState(null);
-
-  async function load() {
-    if (!getToken()) {
-      setStatus('anon');
-      return;
-    }
-    setStatus('loading');
-    setError(null);
-    try {
-      const [cat, conf] = await Promise.all([
-        listProviderCatalog(),
-        listConfiguredProviders(),
-      ]);
-      setCatalog(cat);
-      const map = {};
-      conf.forEach((row) => {
-        map[row.provider_id] = row;
-      });
-      setConfigured(map);
-      setStatus('ready');
-    } catch (err) {
-      setError(err.message);
-      setStatus('error');
-    }
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  
+  // Convert providers array to object map for easy lookup
+  const configured = {};
+  configuredProviders.forEach((row) => {
+    configured[row.provider_id] = row;
+  });
+  
+  const status = !getToken() ? 'anon' : catalogLoading || providersLoading ? 'loading' : catalogError || providersError ? 'error' : 'ready';
+  const error = catalogError?.message || providersError?.message;
 
   function flash(message, kind = 'success') {
     setNotice({ message, kind });
@@ -482,7 +575,7 @@ function ProvidersTab() {
         <div className="empty-icon">⚠️</div>
         <h3>Could not load providers</h3>
         <p>{error}</p>
-        <button className="btn p" onClick={load}>Retry</button>
+        <button className="btn p" onClick={() => refetch()}>Retry</button>
       </div>
     );
   }
@@ -565,10 +658,15 @@ function ProvidersTab() {
 function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDeleted }) {
   const queryClient = useQueryClient();
   const invalidateProviderModels = () => queryClient.invalidateQueries({ queryKey: ['provider-models'] });
+  
+  // Use React Query mutation hooks
+  const addProviderMutation = useAddProvider();
+  const updateProviderMutation = useUpdateProvider();
+  const deleteProviderMutation = useDeleteProvider();
+  
   const isConfigured = Boolean(existing);
   const [step, setStep] = useState(isConfigured ? 'models' : 'key');
   const [apiKey, setApiKey] = useState('');
-  const [keyBusy, setKeyBusy] = useState(false);
   const [keyError, setKeyError] = useState(null);
   const [keyStored, setKeyStored] = useState(isConfigured);
 
@@ -581,7 +679,6 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
   const [defaultModel, setDefaultModel] = useState(
     (existing && existing.default_model) || null
   );
-  const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
   const modelsQuery = useProviderModels(provider.provider_id, {
@@ -593,10 +690,9 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
 
   async function verifyAndContinue(e) {
     e.preventDefault();
-    setKeyBusy(true);
     setKeyError(null);
     try {
-      const row = await addProvider({
+      const row = await addProviderMutation.mutateAsync({
         provider_id: provider.provider_id,
         api_key: apiKey.trim(),
       });
@@ -607,8 +703,6 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
       setApiKey('');
     } catch (err) {
       setKeyError(err.message);
-    } finally {
-      setKeyBusy(false);
     }
   }
 
@@ -636,7 +730,6 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
 
   async function save(e) {
     if (e) e.preventDefault();
-    setSaving(true);
     setSaveError(null);
     try {
       const enabled = Array.from(selected);
@@ -652,7 +745,7 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
           setSaveError('API key required — go back and enter it.');
           return;
         }
-        const row = await addProvider({
+        const row = await addProviderMutation.mutateAsync({
           provider_id: provider.provider_id,
           api_key: apiKey.trim(),
           ...payload,
@@ -661,13 +754,14 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
         onSaved(row, `${provider.display_name} configured`);
         return;
       }
-      const row = await updateProvider(provider.provider_id, payload);
+      const row = await updateProviderMutation.mutateAsync({
+        providerId: provider.provider_id,
+        payload,
+      });
       await invalidateProviderModels();
       onSaved(row, `${provider.display_name} updated`);
     } catch (err) {
       setSaveError(err.message);
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -681,7 +775,7 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
       `Are you sure you want to permanently delete this provider and its dependents?`;
     if (!window.confirm(confirmMsg)) return;
     try {
-      await deleteProvider(provider.provider_id);
+      await deleteProviderMutation.mutateAsync(provider.provider_id);
       await invalidateProviderModels();
       onDeleted(provider.provider_id);
     } catch (err) {
@@ -747,9 +841,9 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
               <button
                 type="submit"
                 className="btn p"
-                disabled={keyBusy || !apiKey.trim()}
+                disabled={addProviderMutation.isPending || !apiKey.trim()}
               >
-                {keyBusy ? 'Verifying…' : 'Verify & continue'}
+                {addProviderMutation.isPending ? 'Verifying…' : 'Verify & continue'}
               </button>
             </div>
           </form>
@@ -879,8 +973,8 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
                 <button type="button" className="btn g" onClick={onClose}>
                   {keyStored ? 'Close' : 'Skip for now'}
                 </button>
-                <button type="submit" className="btn p" disabled={saving}>
-                  {saving ? 'Saving…' : 'Save selection'}
+                <button type="submit" className="btn p" disabled={updateProviderMutation.isPending || addProviderMutation.isPending}>
+                  {(updateProviderMutation.isPending || addProviderMutation.isPending) ? 'Saving…' : 'Save selection'}
                 </button>
               </div>
             </div>
@@ -892,17 +986,28 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
 }
 
 function AgentsTab() {
-  const [agents, setAgents] = useState([]);
-  const [workflows, setWorkflows] = useState([]);
-  const [registeredTools, setRegisteredTools] = useState([]);
-  const [builtinTools, setBuiltinTools] = useState([]);
-  const [providers, setProviders] = useState([]);
-  const [knowledgeBases, setKnowledgeBases] = useState([]);
-  const [status, setStatus] = useState('loading');
+  // Use React Query hooks for automatic caching
+  const { data: agents = [], isLoading: agentsLoading, error: agentsError, refetch: refetchAgents } = useAgents();
+  const { data: workflows = [], isLoading: workflowsLoading, error: workflowsError } = useWorkflows();
+  const { data: providers = [], isLoading: providersLoading, error: providersError } = useProviders();
+  const { data: knowledgeBases = [], isLoading: kbLoading, error: kbError } = useKnowledgeBases();
+  const { data: customTools = [] } = useCustomTools();
+  const { data: builtinToolsData } = useBuiltinTools();
+  
+  const builtinTools = builtinToolsData?.builtin_tools || [];
+  const registeredTools = customTools || [];
+  
   const [isCreating, setIsCreating] = useState(false);
   const [editingAgent, setEditingAgent] = useState(null);
   const [notice, setNotice] = useState(null);
   const [expandedAgentId, setExpandedAgentId] = useState(null);
+  const [agentBrief, setAgentBrief] = useState('');
+  const [agentBuilderModel, setAgentBuilderModel] = useState('');
+  const [generatingAgentDraft, setGeneratingAgentDraft] = useState(false);
+  const [generatedWorkflowMeta, setGeneratedWorkflowMeta] = useState(null);
+  const [generatedWorkflowName, setGeneratedWorkflowName] = useState('');
+  const [generatedWorkflowDescription, setGeneratedWorkflowDescription] = useState('');
+  const [savingGeneratedWorkflow, setSavingGeneratedWorkflow] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -918,6 +1023,15 @@ function AgentsTab() {
     max_input_chars: 30000,
     knowledge_base_ids: [],
   });
+  
+  // Mutation hooks
+  const createAgentMutation = useCreateAgent();
+  const updateAgentMutation = useUpdateAgent();
+  const deleteAgentMutation = useDeleteAgent();
+  const createWorkflowMutation = useCreateWorkflow();
+  const updateWorkflowMutation = useUpdateWorkflow();
+  const generateWorkflowDraftMutation = useGenerateWorkflowDraft();
+  
   const selectedProvider = providers.find((p) => p.id === formData.provider_id);
   const providerModelsQuery = useProviderModels(selectedProvider?.provider_id, {
     enabled: isCreating && Boolean(selectedProvider),
@@ -929,12 +1043,18 @@ function AgentsTab() {
   ].filter(Boolean)));
   const modelsLoading = providerModelsQuery.isLoading || providerModelsQuery.isFetching;
   const modelsError = providerModelsQuery.error?.message;
+  const agentBuilderModels = Array.from(new Set([...(selectedProvider?.enabled_models || []), selectedProvider?.default_model].filter(Boolean)));
   
   const [workflowDraft, setWorkflowDraft] = useState(null);
   const [workflowEditError, setWorkflowEditError] = useState('');
   const [savingWorkflow, setSavingWorkflow] = useState(false);
   const selectedWorkflow = workflows.find((workflow) => workflow.version_id === formData.workflow_version_id);
   const workflowRoles = new Set((selectedWorkflow?.definition?.nodes || []).map((node) => node.role));
+
+  useEffect(() => {
+    if (!selectedProvider) return;
+    setAgentBuilderModel((current) => agentBuilderModels.includes(current) ? current : selectedProvider.default_model || agentBuilderModels[0] || '');
+  }, [formData.provider_id, selectedProvider?.default_model]);
 
   useEffect(() => {
     if (!selectedProvider || !providerModels.length) return;
@@ -945,37 +1065,9 @@ function AgentsTab() {
     }));
   }, [providerModelsQuery.data, selectedProvider?.default_model]);
 
-  async function load() {
-    if (!getToken()) {
-      setStatus('anon');
-      return;
-    }
-    setStatus('loading');
-    try {
-      const [agentsData, providersData, kbData, workflowData, customToolData, builtinToolData] = await Promise.all([
-        listAgents(),
-        listConfiguredProviders(),
-        listKnowledgeBases(),
-        listWorkflows(),
-        listCustomTools().catch(() => []),
-        listBuiltinTools().catch(() => ({ builtin_tools: [] })),
-      ]);
-      setAgents(agentsData);
-      setProviders(providersData);
-      setKnowledgeBases(kbData || []);
-      setWorkflows(workflowData || []);
-      setRegisteredTools(customToolData || []);
-      setBuiltinTools(builtinToolData?.builtin_tools || []);
-      setStatus('ready');
-    } catch (err) {
-      console.error(err);
-      setStatus('error');
-    }
-  }
-  
-  useEffect(() => {
-    load();
-  }, []);
+  const isLoading = agentsLoading || workflowsLoading || providersLoading || kbLoading;
+  const loadError = agentsError || workflowsError || providersError || kbError;
+  const status = isLoading ? 'loading' : loadError ? 'error' : 'ready';
 
   function flash(message, kind = 'success') {
     setNotice({ message, kind });
@@ -983,6 +1075,10 @@ function AgentsTab() {
   }
 
   function handleProviderSelect(providerId) {
+    setAgentBuilderModel('');
+    setGeneratedWorkflowMeta(null);
+    setGeneratedWorkflowName('');
+    setGeneratedWorkflowDescription('');
     setFormData((prev) => ({
       ...prev,
       provider_id: providerId,
@@ -1005,6 +1101,10 @@ function AgentsTab() {
     });
     setWorkflowDraft(null);
     setWorkflowEditError('');
+    setGeneratedWorkflowMeta(null);
+    setGeneratedWorkflowName('');
+    setGeneratedWorkflowDescription('');
+    setAgentBrief('');
     setIsCreating(true);
   }
 
@@ -1014,12 +1114,14 @@ function AgentsTab() {
     setWorkflowEditError('');
     try {
       const definition = JSON.parse(workflowDraft);
-      const saved = await updateWorkflow(selectedWorkflow.id, {
-        name: selectedWorkflow.name,
-        description: selectedWorkflow.description || '',
-        definition,
+      const saved = await updateWorkflowMutation.mutateAsync({
+        workflowId: selectedWorkflow.id,
+        payload: {
+          name: selectedWorkflow.name,
+          description: selectedWorkflow.description || '',
+          definition,
+        },
       });
-      setWorkflows((current) => current.map((workflow) => workflow.id === saved.id ? saved : workflow));
       setFormData((current) => ({ ...current, workflow_version_id: saved.version_id }));
       setEditingAgent((current) => current ? ({
         ...current,
@@ -1032,6 +1134,46 @@ function AgentsTab() {
     } finally {
       setSavingWorkflow(false);
     }
+  }
+
+  async function generateAgentConfiguration() {
+    if (!formData.provider_id || !agentBuilderModel || agentBrief.trim().length < 10) return;
+    setGeneratingAgentDraft(true);
+    setWorkflowEditError('');
+    try {
+      const draft = await generateWorkflowDraftMutation.mutateAsync({
+        kind: 'agent', brief: agentBrief.trim(), provider_id: formData.provider_id, model: agentBuilderModel,
+      });
+      setFormData((current) => ({ ...current, name: draft.agent.name, workflow_version_id: '' }));
+      setWorkflowDraft(JSON.stringify(draft.workflow, null, 2));
+      setGeneratedWorkflowMeta(draft);
+      setGeneratedWorkflowName(draft.workflow_name);
+      setGeneratedWorkflowDescription(draft.workflow_description || '');
+      flash('Generated an editable Agent and workflow draft. Review it and save the workflow when ready.');
+    } catch (err) { flash(err.message, 'error'); }
+    finally { setGeneratingAgentDraft(false); }
+  }
+
+  async function saveGeneratedWorkflow() {
+    if (!generatedWorkflowMeta || workflowDraft === null) return;
+    setSavingGeneratedWorkflow(true);
+    setWorkflowEditError('');
+    try {
+      const definition = JSON.parse(workflowDraft);
+      const saved = await createWorkflowMutation.mutateAsync({
+        name: generatedWorkflowName,
+        description: generatedWorkflowDescription,
+        definition,
+      });
+      setFormData((current) => ({ ...current, workflow_version_id: saved.version_id }));
+      setWorkflowDraft(null);
+      setGeneratedWorkflowMeta(null);
+      setGeneratedWorkflowName('');
+      setGeneratedWorkflowDescription('');
+      flash('Workflow saved and selected. Review the Agent models, then save the Agent.');
+    } catch (err) {
+      setWorkflowEditError(err instanceof SyntaxError ? 'Workflow JSON must be valid before saving.' : err.message);
+    } finally { setSavingGeneratedWorkflow(false); }
   }
 
   async function handleCreate(e) {
@@ -1069,8 +1211,11 @@ function AgentsTab() {
           : Number(formData.context_window_tokens) || 4096,
         knowledge_base_ids: formData.knowledge_base_ids,
       };
-      if (editingAgent) await updateAgent(editingAgent.id, payload);
-      else await createAgent(payload);
+      if (editingAgent) {
+        await updateAgentMutation.mutateAsync({ agentId: editingAgent.id, payload });
+      } else {
+        await createAgentMutation.mutateAsync(payload);
+      }
       setIsCreating(false);
       setEditingAgent(null);
       setFormData({
@@ -1089,7 +1234,6 @@ function AgentsTab() {
         knowledge_base_ids: [],
       });
       flash(editingAgent ? 'Agent updated successfully!' : 'Agent created successfully!');
-      load();
     } catch (err) {
       flash(err.message, 'error');
     }
@@ -1098,16 +1242,15 @@ function AgentsTab() {
   async function handleDelete(id) {
     if (!window.confirm('Delete this agent?')) return;
     try {
-      await deleteAgent(id);
+      await deleteAgentMutation.mutateAsync(id);
       flash('Agent deleted.');
-      load();
     } catch (err) {
       flash(err.message, 'error');
     }
   }
 
   if (status === 'loading') return <div>Loading agents...</div>;
-  if (status === 'error') return <div>Error loading agents.</div>;
+  if (status === 'error') return <div className="tab-notice error">Could not load Agents: {loadError.message}</div>;
 
   if (isCreating) {
     return (
@@ -1141,6 +1284,17 @@ function AgentsTab() {
               ))}
             </select>
           </div>
+          {!editingAgent && <section className="workflow-ai-builder" style={{ marginBottom: '1rem' }}>
+            <div><h3>Generate this Agent from a brief</h3><p className="field-hint">Choose a configured provider above. This model drafts the Agent name and workflow; you review the workflow and choose the Agent’s runtime models below.</p></div>
+            {selectedProvider && <>
+              <label className="field-label">Model to generate the draft</label>
+              <select className="default-select" value={agentBuilderModel} onChange={(event) => setAgentBuilderModel(event.target.value)}><option value="">Choose model</option>{agentBuilderModels.map((model) => <option key={model} value={model}>{model}</option>)}</select>
+              <label className="field-label">Describe the Agent you need</label>
+              <textarea className="key-input" rows={4} value={agentBrief} onChange={(event) => setAgentBrief(event.target.value)} placeholder="What should the Agent help with? Describe the kinds of requests it handles, the steps it should take, and the results it should return." />
+              <button type="button" className="btn g" onClick={generateAgentConfiguration} disabled={generatingAgentDraft || !agentBuilderModel || agentBrief.trim().length < 10}>{generatingAgentDraft ? 'Generating draft…' : 'Generate Agent and workflow draft'}</button>
+            </>}
+            {!selectedProvider && <span className="field-hint">Select one of your configured providers to choose the model used for drafting.</span>}
+          </section>}
           <div style={{ marginBottom: '1rem' }}>
             <label className="field-label">Workflow</label>
             <select className="default-select" required value={formData.workflow_version_id || ''} onChange={(e) => { setFormData({ ...formData, workflow_version_id: e.target.value }); setWorkflowDraft(null); setWorkflowEditError(''); }}>
@@ -1157,11 +1311,14 @@ function AgentsTab() {
               <ol style={{ margin: '0.5rem 0 0', paddingLeft: '1.4rem' }}>{selectedWorkflow.definition.nodes.map((node) => <li key={node.id}><strong>{node.name || node.id}</strong> <span className="field-hint">({node.role}) · {node.id} · Tools: {(node.tools || []).join(', ') || 'none assigned'}</span></li>)}</ol>
             </div>}
             {workflowDraft !== null && <div style={{ marginTop: '0.75rem' }}>
+              {generatedWorkflowMeta && <div className="workflow-draft-notes"><strong>AI generated draft — nothing is saved until you choose below</strong><span>Drafted with {agentBuilderModel} via {selectedProvider?.provider_id}. You can edit every field in the workflow JSON before saving it.</span><label className="field-label">Workflow name</label><input className="key-input" value={generatedWorkflowName} onChange={(event) => setGeneratedWorkflowName(event.target.value)} /><label className="field-label">Workflow description</label><input className="key-input" value={generatedWorkflowDescription} onChange={(event) => setGeneratedWorkflowDescription(event.target.value)} /><strong>Suggested Agent: {generatedWorkflowMeta.agent?.name}</strong><span>{generatedWorkflowMeta.agent?.purpose}</span>{[...(generatedWorkflowMeta.assumptions || []), ...(generatedWorkflowMeta.questions || []), ...(generatedWorkflowMeta.setup_notes || [])].length > 0 && <ul>{[...(generatedWorkflowMeta.assumptions || []).map((item) => `Assumption: ${item}`), ...(generatedWorkflowMeta.questions || []).map((item) => `Question: ${item}`), ...(generatedWorkflowMeta.setup_notes || []).map((item) => `Setup: ${item}`)].map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>}
               <label className="field-label">Workflow definition (JSON)</label>
               <textarea className="key-input" rows={18} value={workflowDraft} onChange={(event) => setWorkflowDraft(event.target.value)} spellCheck={false} />
               <span className="field-hint">Edit every node’s role instructions, mapped inputs, output contract, tools, transitions, and limits here.</span>
               {workflowEditError && <div className="field-hint" style={{ color: '#b42318' }}>{workflowEditError}</div>}
-              <button type="button" className="btn p" style={{ marginTop: '0.5rem' }} onClick={saveWorkflowFromAgent} disabled={savingWorkflow}>{savingWorkflow ? 'Saving workflow…' : 'Save workflow version'}</button>
+              {generatedWorkflowMeta
+                ? <button type="button" className="btn p" style={{ marginTop: '0.5rem' }} onClick={saveGeneratedWorkflow} disabled={savingGeneratedWorkflow || !generatedWorkflowName.trim()}>{savingGeneratedWorkflow ? 'Saving workflow…' : 'Save workflow and use for this Agent'}</button>
+                : <button type="button" className="btn p" style={{ marginTop: '0.5rem' }} onClick={saveWorkflowFromAgent} disabled={savingWorkflow}>{savingWorkflow ? 'Saving workflow…' : 'Save workflow version'}</button>}
             </div>}
           </div>
           {selectedProvider && (
@@ -1381,24 +1538,25 @@ function AgentsTab() {
 const INTEGRATION_BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
 function IntegrationTab() {
-  const [agents, setAgents] = useState([]);
+  // Use React Query hook for automatic caching
+  const { data: agents = [], isLoading: loadingAgents, error: loadError } = useAgents();
+  
   const [selectedId, setSelectedId] = useState('');
   const [template, setTemplate] = useState('react');
   const [endUserId, setEndUserId] = useState('demo-user-123');
   const [sessionId, setSessionId] = useState('demo-conversation-123');
   const [prompt, setPrompt] = useState('What can you help me with?');
-  const [loadingAgents, setLoadingAgents] = useState(true);
   const [running, setRunning] = useState(false);
   const [runOutput, setRunOutput] = useState('');
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
 
+  // Set the first agent as selected when agents load
   useEffect(() => {
-    listAgents().then((rows) => {
-      setAgents(rows || []);
-      setSelectedId(rows?.[0]?.id || '');
-    }).catch((err) => setError(err.message)).finally(() => setLoadingAgents(false));
-  }, []);
+    if (agents.length > 0 && !selectedId) {
+      setSelectedId(agents[0].id);
+    }
+  }, [agents, selectedId]);
 
 
   const examples = {
@@ -1522,15 +1680,20 @@ function sampleToolArguments(schema) {
 }
 
 function ToolsTab() {
-  const [tools, setTools] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  // Use React Query hooks for automatic caching and refetching
+  const { data: tools = [], isLoading: loading, error: loadError, refetch } = useCustomTools();
+  
+  // Mutation hooks for write operations
+  const createToolMutation = useCreateCustomTool();
+  const updateToolMutation = useUpdateCustomTool();
+  const deleteToolMutation = useDeleteCustomTool();
+  const testToolMutation = useTestCustomTool();
+  
   const [deletingAll, setDeletingAll] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
   const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState(null);
-  const [testing, setTesting] = useState(false);
   const [testArguments, setTestArguments] = useState('{\n  "page_number": 1\n}');
   const [testResult, setTestResult] = useState(null);
   const [form, setForm] = useState({
@@ -1538,13 +1701,15 @@ function ToolsTab() {
     timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}',
   });
 
-  async function load() {
-    setLoading(true);
-    try { setTools(await listCustomTools()); }
-    catch (err) { setNotice({ kind: 'error', message: err.message }); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, []);
+  const saving = createToolMutation.isPending || updateToolMutation.isPending;
+  const testing = testToolMutation.isPending;
+
+  // Show load error in notice if any
+  useEffect(() => {
+    if (loadError) {
+      setNotice({ kind: 'error', message: loadError.message });
+    }
+  }, [loadError]);
 
   function sampleArguments() {
     try {
@@ -1556,7 +1721,7 @@ function ToolsTab() {
     }
   }
 
-  async function testTool() {
+  function testTool() {
     let inputSchema;
     let argumentsObject;
     try {
@@ -1568,26 +1733,26 @@ function ToolsTab() {
       setTestResult({ ok: false, error: err.message || 'Schema and test arguments must be valid JSON objects.' });
       return;
     }
-    setTesting(true);
+    
     setTestResult(null);
-    try {
-      const result = await testCustomTool({
-        endpoint_url: form.endpoint_url.trim(),
-        auth_token: form.auth_token || null,
-        timeout_ms: Number(form.timeout_ms) || 10000,
-        input_schema: inputSchema,
-        arguments: argumentsObject,
-        tool_id: editingTool?.id || null,
-      });
-      setTestResult(result);
-    } catch (err) {
-      setTestResult({ ok: false, error: err.message });
-    } finally {
-      setTesting(false);
-    }
+    testToolMutation.mutate({
+      endpoint_url: form.endpoint_url.trim(),
+      auth_token: form.auth_token || null,
+      timeout_ms: Number(form.timeout_ms) || 10000,
+      input_schema: inputSchema,
+      arguments: argumentsObject,
+      tool_id: editingTool?.id || null,
+    }, {
+      onSuccess: (result) => {
+        setTestResult(result);
+      },
+      onError: (err) => {
+        setTestResult({ ok: false, error: err.message });
+      }
+    });
   }
 
-  async function register(event) {
+  function register(event) {
     event.preventDefault();
     let inputSchema;
     try {
@@ -1597,30 +1762,40 @@ function ToolsTab() {
       setNotice({ kind: 'error', message: 'Input schema must be a valid JSON object.' });
       return;
     }
-    setSaving(true);
+    
     setNotice(null);
-    try {
-      const payload = {
-        name: form.name.trim(), description: form.description.trim(), kind: 'webhook',
-        endpoint_url: form.endpoint_url.trim(),
-        timeout_ms: Number(form.timeout_ms) || 10000, input_schema: inputSchema,
-        auth_token: form.auth_token || undefined,
-      };
-      const saved = editingTool
-        ? await updateCustomTool(editingTool.id, payload)
-        : await createCustomTool(payload);
-      const refreshedTools = await listCustomTools();
-      setTools(refreshedTools);
-      const registered = refreshedTools.some((tool) => tool.id === saved.id || tool.name === payload.name);
-      if (!registered) throw new Error('Save returned successfully, but the tool was not found in the registered tools list. Refresh and check the server response.');
-      setForm({ name: '', description: '', endpoint_url: '', auth_token: '', timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}' });
-      setTestArguments('{\n  "page_number": 1\n}');
-      setTestResult(null);
-      setShowForm(false);
-      setEditingTool(null);
-      setNotice({ kind: 'success', message: editingTool ? 'Tool updated and confirmed in the registered tools list.' : 'Tool registered and confirmed available in workflow tool selectors.' });
-    } catch (err) { setNotice({ kind: 'error', message: err.message }); }
-    finally { setSaving(false); }
+    const payload = {
+      name: form.name.trim(), description: form.description.trim(), kind: 'webhook',
+      endpoint_url: form.endpoint_url.trim(),
+      timeout_ms: Number(form.timeout_ms) || 10000, input_schema: inputSchema,
+      auth_token: form.auth_token || undefined,
+    };
+    
+    const mutation = editingTool ? updateToolMutation : createToolMutation;
+    const mutationPayload = editingTool 
+      ? { toolId: editingTool.id, payload }
+      : payload;
+    
+    mutation.mutate(mutationPayload, {
+      onSuccess: (saved) => {
+        // Verify the tool is in the list
+        const registered = tools.some((tool) => tool.id === saved.id || tool.name === payload.name);
+        if (!registered) {
+          // Refetch to get the latest list
+          refetch();
+        }
+        
+        setForm({ name: '', description: '', endpoint_url: '', auth_token: '', timeout_ms: 10000, input_schema: '{\n  "type": "object",\n  "properties": {\n    "page_number": { "type": "integer", "description": "Page to inspect" }\n  },\n  "required": ["page_number"]\n}' });
+        setTestArguments('{\n  "page_number": 1\n}');
+        setTestResult(null);
+        setShowForm(false);
+        setEditingTool(null);
+        setNotice({ kind: 'success', message: editingTool ? 'Tool updated and confirmed in the registered tools list.' : 'Tool registered and confirmed available in workflow tool selectors.' });
+      },
+      onError: (err) => {
+        setNotice({ kind: 'error', message: err.message });
+      }
+    });
   }
 
   function edit(tool) {
@@ -1673,11 +1848,21 @@ function ToolsTab() {
     setNotice(null);
     const failures = [];
     let imported = 0;
+    
+    // Import tools sequentially
     for (const tool of entries) {
-      try { await createCustomTool(tool); imported += 1; }
-      catch (err) { failures.push(`${tool.name}: ${err.message}`); }
+      try { 
+        await createToolMutation.mutateAsync(tool);
+        imported += 1; 
+      }
+      catch (err) { 
+        failures.push(`${tool.name}: ${err.message}`); 
+      }
     }
-    await load();
+    
+    // Refetch the list after import
+    await refetch();
+    
     setNotice({
       kind: failures.length ? 'error' : 'success',
       message: failures.length
@@ -1687,14 +1872,13 @@ function ToolsTab() {
     setImporting(false);
   }
 
-  async function remove(tool) {
+  function remove(tool) {
     if (deletingAll) return;
     if (!window.confirm(`Delete the tool “${tool.name}”?`)) return;
-    try {
-      await deleteCustomTool(tool.id);
-      setTools((current) => current.filter((item) => item.id !== tool.id));
-      setNotice({ kind: 'success', message: `Deleted ${tool.name}.` });
-    } catch (err) { setNotice({ kind: 'error', message: err.message }); }
+    deleteToolMutation.mutate(tool.id, {
+      onSuccess: () => setNotice({ kind: 'success', message: `Deleted ${tool.name}.` }),
+      onError: (err) => setNotice({ kind: 'error', message: err.message }),
+    });
   }
 
   async function removeAll() {
@@ -1703,14 +1887,13 @@ function ToolsTab() {
     setDeletingAll(true);
     setNotice(null);
     try {
-      const results = await Promise.allSettled(tools.map((tool) => deleteCustomTool(tool.id)));
+      const results = await Promise.allSettled(tools.map((tool) => deleteToolMutation.mutateAsync(tool.id)));
       const deletedIds = new Set();
       const failures = [];
       results.forEach((result, index) => {
         if (result.status === 'fulfilled') deletedIds.add(tools[index].id);
         else failures.push(`${tools[index].name}: ${result.reason?.message || 'Delete failed'}`);
       });
-      setTools((current) => current.filter((tool) => !deletedIds.has(tool.id)));
       setNotice(failures.length
         ? { kind: 'error', message: `Deleted ${deletedIds.size} of ${tools.length} tools. ${failures.join(' | ')}` }
         : { kind: 'success', message: `Deleted all ${tools.length} custom tools.` });
@@ -1763,8 +1946,10 @@ function ToolsTab() {
 }
 
 function KnowledgeTab() {
-  const [kbs, setKbs] = useState([]);
-  const [providers, setProviders] = useState([]);
+  // Use React Query hooks for automatic caching
+  const { data: kbs = [], isLoading: kbsLoading, error: kbsError, refetch } = useKnowledgeBases();
+  const { data: providers = [], isLoading: providersLoading, error: providersError } = useProviders();
+  
   const [status, setStatus] = useState('loading');
   const [isCreating, setIsCreating] = useState(false);
   const [editingKb, setEditingKb] = useState(null);
@@ -1779,6 +1964,12 @@ function KnowledgeTab() {
     vector_index_host: '',
     rerank_model: 'bge-reranker-v2-m3',
   });
+  
+  // Mutation hooks
+  const createKbMutation = useCreateKnowledgeBase();
+  const updateKbMutation = useUpdateKnowledgeBase();
+  const deleteKbMutation = useDeleteKnowledgeBase();
+  
   const selectedProvider = providers.find((p) => p.id === formData.provider_id);
   const providerModelsQuery = useProviderModels(selectedProvider?.provider_id, {
     enabled: isCreating && Boolean(selectedProvider),
@@ -1789,29 +1980,8 @@ function KnowledgeTab() {
   ].filter(Boolean)));
   const modelsLoading = providerModelsQuery.isLoading || providerModelsQuery.isFetching;
 
-  async function load() {
-    if (!getToken()) {
-      setStatus('anon');
-      return;
-    }
-    setStatus('loading');
-    try {
-      const [kbsData, providersData] = await Promise.all([
-        listKnowledgeBases(),
-        listConfiguredProviders(),
-      ]);
-      setKbs(kbsData);
-      setProviders(providersData);
-      setStatus('ready');
-    } catch (err) {
-      console.error(err);
-      setStatus('error');
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
+  const isLoading = kbsLoading || providersLoading;
+  const loadError = kbsError || providersError;
 
   function flash(message, kind = 'success') {
     setNotice({ message, kind });
@@ -1872,11 +2042,11 @@ function KnowledgeTab() {
           payload.vector_api_key = formData.vector_api_key.trim();
           payload.vector_index_host = formData.vector_index_host.trim();
         }
-        await updateKnowledgeBase(editingKb.id, payload);
+        await updateKbMutation.mutateAsync({ kbId: editingKb.id, payload });
       } else {
         payload.vector_api_key = formData.use_custom_vector_db ? formData.vector_api_key.trim() : null;
         payload.vector_index_host = formData.use_custom_vector_db ? formData.vector_index_host.trim() : null;
-        await createKnowledgeBase(payload);
+        await createKbMutation.mutateAsync(payload);
       }
       setIsCreating(false);
       setEditingKb(null);
@@ -1890,7 +2060,6 @@ function KnowledgeTab() {
         rerank_model: 'bge-reranker-v2-m3',
       });
       flash(editingKb ? 'Knowledge Base updated successfully!' : 'Knowledge Base created successfully!');
-      load();
     } catch (err) {
       flash(err.message, 'error');
     }
@@ -1899,16 +2068,15 @@ function KnowledgeTab() {
   async function handleDelete(id) {
     if (!window.confirm('Delete this knowledge base?')) return;
     try {
-      await deleteKnowledgeBase(id);
+      await deleteKbMutation.mutateAsync(id);
       flash('Knowledge base deleted.');
-      load();
     } catch (err) {
       flash(err.message, 'error');
     }
   }
 
-  if (status === 'loading') return <div>Loading knowledge bases...</div>;
-  if (status === 'error') return <div>Error loading knowledge bases.</div>;
+  if (isLoading) return <div>Loading knowledge bases...</div>;
+  if (loadError) return <div>Error loading knowledge bases.</div>;
 
   if (isCreating) {
     return (
@@ -2127,31 +2295,15 @@ function KnowledgeTab() {
 }
 
 function ApiKeysTab() {
-  const [apiKeys, setApiKeys] = useState([]);
-  const [status, setStatus] = useState('loading');
   const [notice, setNotice] = useState(null);
   const [newKey, setNewKey] = useState(null);
-  const [generating, setGenerating] = useState(false);
-
-  async function load() {
-    if (!getToken()) {
-      setStatus('anon');
-      return;
-    }
-    setStatus('loading');
-    try {
-      const data = await listApiKeys();
-      setApiKeys(data.keys || []);
-      setStatus('ready');
-    } catch (err) {
-      console.error(err);
-      setStatus('error');
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
+  
+  // Use React Query hooks for automatic caching
+  const { data: apiKeysData, isLoading, error, refetch } = useApiKeys();
+  const apiKeys = apiKeysData?.keys || [];
+  const createKeyMutation = useCreateApiKey();
+  
+  const status = !getToken() ? 'anon' : isLoading ? 'loading' : error ? 'error' : 'ready';
 
   function flash(message, kind = 'success') {
     setNotice({ message, kind });
@@ -2159,10 +2311,9 @@ function ApiKeysTab() {
   }
 
   async function handleGenerateKey() {
-    setGenerating(true);
     setNewKey(null);
     try {
-      const data = await createApiKey();
+      const data = await createKeyMutation.mutateAsync();
       setNewKey({
         key: data.api_key,
         prefix: data.prefix,
@@ -2177,11 +2328,8 @@ function ApiKeysTab() {
       }
       
       flash('API key generated successfully!');
-      load(); // Reload the key list
     } catch (err) {
       flash(err.message, 'error');
-    } finally {
-      setGenerating(false);
     }
   }
 
@@ -2213,7 +2361,7 @@ function ApiKeysTab() {
       <div className="empty-state">
         <div className="empty-icon">⚠️</div>
         <h3>Could not load API keys</h3>
-        <button className="btn p" onClick={load}>Retry</button>
+        <button className="btn p" onClick={() => refetch()}>Retry</button>
       </div>
     );
   }
@@ -2233,9 +2381,9 @@ function ApiKeysTab() {
         <button 
           className="btn p" 
           onClick={handleGenerateKey}
-          disabled={generating}
+          disabled={createKeyMutation.isPending}
         >
-          {generating ? 'Generating...' : '+ Generate New API Key'}
+          {createKeyMutation.isPending ? 'Generating...' : '+ Generate New API Key'}
         </button>
       </div>
 
@@ -2285,9 +2433,9 @@ function ApiKeysTab() {
           <button 
             className="btn p" 
             onClick={handleGenerateKey}
-            disabled={generating}
+            disabled={createKeyMutation.isPending}
           >
-            {generating ? 'Generating...' : 'Generate API Key'}
+            {createKeyMutation.isPending ? 'Generating...' : 'Generate API Key'}
           </button>
         </div>
       ) : (
