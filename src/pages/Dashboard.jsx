@@ -78,7 +78,7 @@ function InputMappingJsonField({ value, previousNodes = [], onChange }) {
 function OutputContractField({ value, onChange }) {
   return <div>
     <label className="field-label">Output JSON format</label>
-    <span className="field-hint">Write the JSON shape the model must return. Values are expected types. Example: <code>{'{"layout":"object","summary":"string"}'}</code>. This is a format, not an output value.</span>
+    <span className="field-hint">Write the JSON shape the model must return. Values are expected types. Use a type array for nullable fields, e.g. <code>{'{"rejection_reason":["string","null"]}'}</code>. This is a format, not an output value.</span>
     <JsonObjectField label="Output format JSON" value={value} onChange={onChange} rows={5} />
   </div>;
 }
@@ -138,10 +138,82 @@ function workflowNode(id, name, role) {
   };
 }
 
+function normalizeWorkflowAttempts(definition) {
+  return {
+    ...definition,
+    nodes: (definition.nodes || []).map((node) => {
+      const requested = Number(node.max_attempts);
+      const maxAttempts = Number.isFinite(requested) ? Math.floor(requested) : 1;
+      return { ...node, max_attempts: Math.min(3, Math.max(1, maxAttempts)) };
+    }),
+  };
+}
+
+function buildWorkflowLlmInstructions(availableTools) { return `Create a workflow definition for AI Agent Gateway. Return only one valid JSON object for the workflow definition (no Markdown fences or extra commentary), so I can paste it into the workflow JSON editor.
+
+The gateway executes this definition itself; do not write Python/JavaScript code or invent an AgentState object. The runtime builds the state and passes each node only the fields specified by input_mapping. Use this exact schema:
+{
+  "schema_version": 1,
+  "start_node": "first_node_id",
+  "nodes": [
+    {
+      "id": "unique_snake_case_id",
+      "type": "agent",
+      "name": "Readable step name",
+      "role": "executor",
+      "instructions": "Specific task and expected behavior for this step",
+      "input_mapping": { "request": "$.request" },
+      "output_schema": { "response": "string" },
+      "tools": [],
+      "max_attempts": 1
+    }
+  ],
+  "edges": [{ "from": "first_node_id", "to": "next_node_id" }],
+  "limits": { "max_steps": 20, "max_retries_per_step": 1 }
+}
+
+Rules:
+- Supported roles: router, planner, executor, reviewer, direct, finalizer, controller. Use type "agent" for every node.
+- Every node needs a unique non-empty id, non-empty instructions, input_mapping and output_schema objects, a tools array, and max_attempts from 1 to 3. A node may set max_tokens (1–200000) only to override the agent's limits.max_tokens_per_node; omit it to inherit that agent default. Keep schema_version at 1 and max_steps between 1 and 100.
+- input_mapping keys are the exact JSON input field names the node will receive; values must be supported paths: "$.request" (user request string), "$.variables" (variables object), "$.steps" (prior outputs), "$.steps.NODE_ID.output", "$.steps.NODE_ID.output.FIELD", or "$.steps.NODE_ID.status". The first node may map only "$.request" and/or "$.variables". Later nodes may map only original request/variables or outputs/status from nodes that can run before them. Map every field used in the instructions; unmapped values are not available automatically.
+- output_schema is a required JSON output contract, not an example. Every listed key must be returned. Use exactly these datatypes: "string", "number", "integer", "boolean", "object", or "array". For a required value that may be absent, use a type array such as ["string","null"] or ["integer","null"]; the key itself is still required. Example: {"passed":"boolean","feedback":"string","rejection_reason":["string","null"]}. Define the exact nested keys and expected datatypes for every object and array item in that node's instructions, because runtime validation checks the declared top-level types. Return exactly one JSON object with all contract keys; no Markdown, code fences, preamble, prose outside the object, or omitted keys. Use actual JSON null for nullable values, never the string "null". Put explanatory prose inside string fields. Do not put input paths or example output values in output_schema.
+- Follow the working Simple workflow pattern: planner output (for example {"steps":"array"}) is explicitly mapped to executor input via "$.steps.PLAN_NODE.output.steps", and the finalizer maps the executor output via "$.steps.EXECUTOR_NODE.output". Follow Reviewed for a review node that receives the plan and work and returns fields such as {"passed":"boolean","feedback":"string"}. Follow Dynamic for controller branching: include "next":"string", choose only from allowed_next, and make each edge's when.next match a returned value.
+- Use only tool names from this available registered tool list: ${availableTools.length ? availableTools.join(', ') : '(none provided)'}. Put a tool name in a node's tools array only when that step needs it. Otherwise use []. Never invent tools. If a needed tool is missing, leave tools empty and do not add unsupported fields to the workflow; I can document the setup requirement separately.
+- Edges must reference existing node ids. Every node must be reachable from start_node, and the graph must have at least one terminal node. For branching, add edges with "when" matching output fields, e.g. {"from":"route","to":"answer","when":{"next":"answer"}}. A controller's output must include the selected field (commonly {"next":"answer"}) and the outgoing conditions must agree with those values.
+- If I request N retries after review, model the first review plus exactly N explicit revise-and-review stages, then finish with a final response whether the last review passes or fails. Do not depend only on max_steps or max_attempts to end a retry loop; the runtime does not automatically route to a final node when a limit is reached.
+- Keep each node prompt self-contained: state the exact input field names it receives, what to do with each mapped input, and the exact output keys and datatypes it must return, including nested object properties and array-item fields. Use the exact earlier node ids and output keys in paths. If a field can be null, declare the nullable type in output_schema and instruct the node when to return actual JSON null. Set max_attempts from 1 to 3. Do not claim the workflow has been saved or tested.`; }
+
 function findStepReferences(mapping) {
   return [...new Set(Object.values(mapping || {}).flatMap((path) =>
     typeof path === 'string' ? [...path.matchAll(/\$\.steps\.([^.]+)/g)].map((match) => match[1]) : [],
   ))];
+}
+
+function GeneratedTestRunRequest({ request }) {
+  const [copied, setCopied] = useState('');
+  if (!request) return null;
+  const requestJson = JSON.stringify(request, null, 2);
+  async function copy(text, kind) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(kind);
+      window.setTimeout(() => setCopied(''), 1800);
+    } catch {
+      setCopied('');
+    }
+  }
+  return <section className="workflow-draft-notes" aria-live="polite">
+    <strong>Sample run request generated for the first workflow node</strong>
+    <span>The server checked this request against the workflow’s start node. Save the workflow and agent before running it. The full JSON can be sent to <code>POST /v1/agents/&lt;agent_id&gt;/run</code>.</span>
+    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+      <button type="button" className="btn g small" onClick={() => copy(requestJson, 'request')}>{copied === 'request' ? 'Copied run request' : 'Copy run request JSON'}</button>
+      {typeof request.input === 'string' && <button type="button" className="btn g small" onClick={() => copy(request.input, 'input')}>{copied === 'input' ? 'Copied input text' : 'Copy input text'}</button>}
+    </div>
+    <details style={{ marginTop: '0.5rem' }}>
+      <summary style={{ cursor: 'pointer' }}>Preview generated test request</summary>
+      <pre className="integration-code" style={{ maxHeight: 280, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{requestJson}</pre>
+    </details>
+  </section>;
 }
 
 function WorkflowsTab() {
@@ -159,6 +231,7 @@ function WorkflowsTab() {
     ...builtinTools.filter((tool) => tool.always_available || tool.name === 'semantic_search').map((tool) => tool.name),
     ...customTools.map((tool) => tool.name),
   ];
+  const workflowLlmInstructions = buildWorkflowLlmInstructions(availableTools);
   
   // Mutation hooks for write operations
   const createWorkflowMutation = useCreateWorkflow();
@@ -175,6 +248,8 @@ function WorkflowsTab() {
   const [builderProviderId, setBuilderProviderId] = useState('');
   const [builderModel, setBuilderModel] = useState('');
   const [builderMeta, setBuilderMeta] = useState(null);
+  const [workflowInstructionsCopied, setWorkflowInstructionsCopied] = useState(false);
+  const [generationLog, setGenerationLog] = useState([]);
   const [notice, setNotice] = useState(null);
   
   const loading = presetsLoading || workflowsLoading;
@@ -192,28 +267,58 @@ function WorkflowsTab() {
   async function generateWorkflow(kind = 'workflow') {
     if (!builderBrief.trim() || !builderProviderId || !builderModel) return;
     setNotice(null);
+    const startedAt = new Date().toLocaleTimeString();
+    setGenerationLog([
+      { stage: 'Request submitted', status: 'complete', time: startedAt, message: `Sent workflow brief to ${builderProvider?.provider_id || 'selected provider'} using ${builderModel}.` },
+      { stage: 'Provider and server validation', status: 'running', time: startedAt, message: 'Waiting for workflow JSON and sample run request; the server will parse them, validate the graph, and check the first-node inputs.' },
+    ]);
     generateDraftMutation.mutate(
       { kind, brief: builderBrief.trim(), provider_id: builderProviderId, model: builderModel },
       {
         onSuccess: (draft) => {
-          const generated = { name: draft.workflow_name, description: draft.workflow_description, definition: draft.workflow };
+          const definition = normalizeWorkflowAttempts(draft.workflow);
+          const generated = { name: draft.workflow_name, description: draft.workflow_description, definition };
           setEditing(generated);
-          setJsonDraft(JSON.stringify(draft.workflow, null, 2));
+          setJsonDraft(JSON.stringify(definition, null, 2));
           setAdvanced(false);
           setBuilderMeta(draft);
-          setNotice({ kind: 'success', message: 'Generated an editable workflow draft. Review and save it when ready.' });
+          const completedAt = new Date().toLocaleTimeString();
+          setGenerationLog([
+            { stage: 'Request submitted', status: 'complete', time: startedAt, message: `Sent workflow brief to ${builderProvider?.provider_id || 'selected provider'} using ${builderModel}.` },
+            { stage: 'Provider response', status: 'complete', time: completedAt, message: 'Received and parsed workflow definition plus test_run_request.' },
+            { stage: 'Workflow validation', status: 'complete', time: completedAt, message: `Validated ${definition.nodes.length} nodes and ${definition.edges.length} transitions.` },
+            { stage: 'First-node test input', status: 'complete', time: completedAt, message: `Validated sample run request for start node “${definition.start_node}”.` },
+            { stage: 'Draft ready', status: 'complete', time: completedAt, message: 'Review the draft below. Nothing has been saved yet.' },
+          ]);
+          setNotice({ kind: 'success', message: 'Generated the workflow and sample run request. The server validated the workflow structure and first-node inputs.' });
         },
         onError: (err) => {
+          const errorTime = new Date().toLocaleTimeString();
+          const failedStage = err.stage || 'request';
+          setGenerationLog((current) => [
+            ...current.filter((entry) => entry.status !== 'running'),
+            { stage: failedStage, status: 'error', time: errorTime, message: err.message, details: err.details },
+          ]);
           setNotice({ kind: 'error', message: err.message });
         }
       }
     );
   }
 
+  async function copyWorkflowLlmInstructions() {
+    try {
+      await navigator.clipboard.writeText(workflowLlmInstructions);
+      setWorkflowInstructionsCopied(true);
+      window.setTimeout(() => setWorkflowInstructionsCopied(false), 1800);
+    } catch {
+      setNotice({ kind: 'error', message: 'Could not copy instructions. Open the section below and copy its text manually.' });
+    }
+  }
+
   function startCustom() {
     const definition = {
       schema_version: 1, start_node: 'step_1',
-      nodes: [{ ...workflowNode('step_1', 'Step 1', 'executor'), tools: availableTools.filter((name) => name !== 'semantic_search') }], edges: [],
+      nodes: [workflowNode('step_1', 'Step 1', 'executor')], edges: [],
       limits: { max_steps: 20, max_retries_per_step: 1 },
     };
     setEditing({ name: 'My workflow', description: '', definition });
@@ -224,12 +329,10 @@ function WorkflowsTab() {
   async function choosePreset(preset) {
     createFromPresetMutation.mutate(preset.id, {
       onSuccess: (workflow) => {
-        const definition = {
+        const definition = normalizeWorkflowAttempts({
           ...workflow.definition,
-          nodes: workflow.definition.nodes.map((node) => ['executor', 'direct'].includes(node.role)
-            ? { ...node, tools: [...new Set([...(node.tools || []), ...availableTools])] }
-            : node),
-        };
+          nodes: workflow.definition.nodes.map((node) => ({ ...node, tools: [] })),
+        });
         const editableWorkflow = { ...workflow, definition };
         setEditing(editableWorkflow);
         setJsonDraft(JSON.stringify(definition, null, 2));
@@ -255,7 +358,6 @@ function WorkflowsTab() {
       input_mapping: terminal
         ? { input: `$.steps.${terminal.id}.output` }
         : { input: '$.request' },
-      tools: availableTools.filter((name) => name !== 'semantic_search'),
     };
     if (terminal) edges.push({ from: terminal.id, to: id });
     const definition = { ...editing.definition, nodes: [...nodes, newNode], edges };
@@ -318,7 +420,14 @@ function WorkflowsTab() {
         <input className="key-input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} required />
         <label className="field-label" style={{ marginTop: '0.75rem' }}>Description</label>
         <input className="key-input" value={editing.description || ''} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
-        {builderMeta && <div className="workflow-draft-notes"><strong>AI generated draft — review and edit before saving</strong><span>Generated with {builderModel} via {builderProvider?.provider_id}. No workflow or agent has been saved yet.</span>{builderMeta.agent && <span>Suggested agent: <strong>{builderMeta.agent.name}</strong> — {builderMeta.agent.purpose}</span>}{[...(builderMeta.assumptions || []), ...(builderMeta.questions || []), ...(builderMeta.setup_notes || [])].length > 0 && <ul>{[...(builderMeta.assumptions || []).map((item) => `Assumption: ${item}`), ...(builderMeta.questions || []).map((item) => `Question: ${item}`), ...(builderMeta.setup_notes || []).map((item) => `Setup: ${item}`)].map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>}
+        <details style={{ margin: '0.75rem 0' }}>
+          <summary style={{ cursor: 'pointer' }}>Instructions for another LLM</summary>
+          <p className="field-hint">Copy this prompt into your own LLM, describe the workflow you want, then paste its JSON definition into <strong>Edit workflow JSON</strong>.</p>
+          <button type="button" className="btn g small" onClick={copyWorkflowLlmInstructions}>{workflowInstructionsCopied ? 'Copied' : 'Copy instructions'}</button>
+          <pre className="integration-code" style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: '0.5rem' }}>{workflowLlmInstructions}</pre>
+        </details>
+        {builderMeta && <div className="workflow-draft-notes"><strong>AI generated draft — review and edit before saving</strong><span>Generated with {builderModel} via {builderProvider?.provider_id}. No workflow or agent has been saved yet. Workflow schema and sample first-node inputs passed server validation.</span>{builderMeta.agent && <span>Suggested agent: <strong>{builderMeta.agent.name}</strong> — {builderMeta.agent.purpose}</span>}{[...(builderMeta.assumptions || []), ...(builderMeta.questions || []), ...(builderMeta.setup_notes || [])].length > 0 && <ul>{[...(builderMeta.assumptions || []).map((item) => `Assumption: ${item}`), ...(builderMeta.questions || []).map((item) => `Question: ${item}`), ...(builderMeta.setup_notes || []).map((item) => `Setup: ${item}`)].map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>}
+        {builderMeta && <GeneratedTestRunRequest request={builderMeta.test_run_request} />}
         <div style={{ display: 'grid', gap: '0.75rem', margin: '1rem 0' }}>
           {editing.definition.nodes.map((node, index) => {
             const previousNodes = editing.definition.nodes.slice(0, index);
@@ -336,7 +445,7 @@ function WorkflowsTab() {
             </div>
             <div className="workflow-step-tools">
               <label className="field-label">Tools enabled for this step ({(node.tools || []).length} selected)</label>
-              <span className="field-hint">These are the registered tools available to this step. A checked tool can be called by this step; a cleared tool cannot.</span>
+              <span className="field-hint">No tools are selected by default. Select only the registered tools this step needs. A checked tool can be called by this step; a cleared tool cannot.</span>
               {availableTools.length ? <>
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.45rem' }}><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [...new Set([...(node.tools || []), ...availableTools])] })}>Select all</button><button type="button" className="btn g small" onClick={() => updateNode(index, { tools: [] })}>Clear</button></div>
                 <div className="workflow-tool-options">{availableTools.map((tool) => <label key={tool}><input type="checkbox" checked={(node.tools || []).includes(tool)} onChange={(event) => updateNode(index, { tools: event.target.checked ? [...new Set([...(node.tools || []), tool])] : (node.tools || []).filter((name) => name !== tool) })} />{tool}</label>)}</div>
@@ -350,7 +459,10 @@ function WorkflowsTab() {
               <input className="key-input" value={node.return_input || ''} onChange={(e) => updateNode(index, { return_input: e.target.value.trim() || undefined })} placeholder="work" />
               <span className="field-hint">Enter an input-mapping key, such as work, to skip the finalizer model call when that value is already final.</span>
             </div>}
-            <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts</label><input className="key-input" type="number" min="1" max="3" value={node.max_attempts || 1} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
+            <label className="field-label" style={{ marginTop: '0.5rem' }}>Maximum attempts (1–3)</label><input className="key-input" type="number" min="1" max="3" value={Math.min(3, Math.max(1, Number(node.max_attempts) || 1))} onChange={(e) => updateNode(index, { max_attempts: Math.min(3, Math.max(1, Number(e.target.value) || 1)) })} />
+            <label className="field-label" style={{ marginTop: '0.5rem' }}>Completion token cap (optional override)</label>
+            <input className="key-input" type="number" min="1" max="200000" value={node.max_tokens ?? ''} placeholder="Use agent default" onChange={(e) => updateNode(index, { max_tokens: e.target.value ? Number(e.target.value) : undefined })} />
+            <span className="field-hint">Leave blank to use this Agent’s default per-node cap.</span>
             <details style={{ marginTop: '0.5rem' }}><summary style={{ cursor: 'pointer', fontSize: '0.85rem' }}>Step inputs and outputs</summary>
               <InputMappingJsonField value={node.input_mapping} previousNodes={previousNodes} onChange={(input_mapping) => updateNode(index, { input_mapping })} />
               <span className="field-hint" style={{ marginTop: '0.35rem' }}>A tool name is not a workflow step ID. Step IDs are shown above each step.</span>
@@ -398,6 +510,16 @@ function WorkflowsTab() {
         <li>Starter workflows are copied to your account so you can customize them.</li>
       </ul>
       <button className="btn p" onClick={startCustom} style={{ marginBottom: '1rem' }}>+ Create custom workflow</button>
+      <section style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '0.75rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <div><strong>Creating with your own LLM?</strong><p className="field-hint" style={{ margin: '0.25rem 0 0' }}>Copy the workflow schema and state-mapping instructions, ask your LLM to create a definition, then paste it into the workflow JSON editor.</p></div>
+          <button type="button" className="btn g small" onClick={copyWorkflowLlmInstructions}>{workflowInstructionsCopied ? 'Copied' : 'Copy LLM instructions'}</button>
+        </div>
+        <details style={{ marginTop: '0.5rem' }}>
+          <summary style={{ cursor: 'pointer' }}>Preview the instructions</summary>
+          <pre className="integration-code" style={{ maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', marginTop: '0.5rem' }}>{workflowLlmInstructions}</pre>
+        </details>
+      </section>
       <section className="workflow-ai-builder">
         <div className="workflow-ai-builder-heading"><div><h3>Generate a workflow with AI</h3><p className="field-hint">Describe what you need. AI will fill this workflow editor with a draft you can change before saving.</p></div><button type="button" className="btn g" onClick={() => setBuilderOpen((open) => !open)}>{builderOpen ? 'Close' : 'Create from a brief'}</button></div>
         {builderOpen && <div className="workflow-ai-builder-form">
@@ -406,7 +528,17 @@ function WorkflowsTab() {
             <select className="default-select" value={builderProviderId} onChange={(event) => { setBuilderProviderId(event.target.value); setBuilderModel(''); }}><option value="">Choose provider</option>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.provider_id}</option>)}</select>
             {builderProvider && <><label className="field-label">Model to generate the draft</label><select className="default-select" value={builderModel} onChange={(event) => setBuilderModel(event.target.value)}><option value="">Choose model</option>{builderModels.map((model) => <option key={model} value={model}>{model}</option>)}</select></>}
             <label className="field-label">What should this workflow do?</label><textarea className="key-input" rows={5} value={builderBrief} onChange={(event) => setBuilderBrief(event.target.value)} placeholder="Describe the request it handles, steps it should take, tools it might need, and the final result you expect." />
-            <button type="button" className="btn p" onClick={() => generateWorkflow('workflow')} disabled={builderBusy || !builderProviderId || !builderModel || builderBrief.trim().length < 10}>{builderBusy ? 'Generating draft…' : 'Generate workflow draft'}</button>
+            <p className="field-hint" aria-live="polite">{builderBusy ? `Sending the brief to ${builderProvider?.provider_id || 'selected provider'} (${builderModel}). Waiting for its workflow and test request; server validation runs before the draft is shown.` : 'The activity log below shows the provider, parsing, workflow validation, and first-node input check. Nothing is saved until you choose Save.'}</p>
+            <button type="button" className="btn p" onClick={() => generateWorkflow('workflow')} disabled={builderBusy || !builderProviderId || !builderModel || builderBrief.trim().length < 10}>{builderBusy ? 'Generating workflow + test request…' : 'Generate workflow draft'}</button>
+            {generationLog.length > 0 && <section className="workflow-draft-notes" role="log" aria-live="polite" aria-label="Workflow generation activity">
+              <strong>Workflow generation activity</strong>
+              <ol style={{ display: 'grid', gap: '0.45rem', margin: 0, paddingLeft: '1.35rem' }}>
+                {generationLog.map((entry, index) => <li key={`${entry.stage}-${index}`}>
+                  <strong>{entry.status === 'error' ? 'ERROR' : entry.status === 'running' ? 'IN PROGRESS' : 'DONE'} · {entry.stage}</strong> <span className="field-hint">{entry.time} · {entry.message}</span>
+                  {entry.details?.length > 0 && <ul>{entry.details.map((detail, detailIndex) => <li key={detailIndex} className="field-hint">{typeof detail === 'string' ? detail : JSON.stringify(detail)}</li>)}</ul>}
+                </li>)}
+              </ol>
+            </section>}
           </>}
         </div>}
       </section>
@@ -426,7 +558,7 @@ function WorkflowsTab() {
       {!workflows.length ? <p>No saved workflows yet.</p> : <div className="provider-grid">{workflows.map((workflow) => <article key={workflow.id} className="provider-card">
         <h4>{workflow.name}</h4><p>{workflow.description}</p><small>Version {workflow.version} · {workflow.definition.nodes.length} steps</small>
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-          <button className="btn g small" onClick={() => { setEditing(workflow); setJsonDraft(JSON.stringify(workflow.definition, null, 2)); }}>Edit</button>
+          <button className="btn g small" onClick={() => { const definition = normalizeWorkflowAttempts(workflow.definition); setEditing({ ...workflow, definition }); setJsonDraft(JSON.stringify(definition, null, 2)); }}>Edit</button>
           <button className="btn g small" onClick={() => { 
             if (window.confirm('Delete this workflow? Agents currently using it will be reassigned to your Dynamic default workflow. Existing run history and its workflow snapshot will be kept.')) { 
               deleteWorkflowMutation.mutate(workflow.id, {
@@ -632,20 +764,11 @@ function ProvidersTab() {
           provider={active}
           existing={configured[active.provider_id] || null}
           onClose={() => setActiveProvider(null)}
-          onKeySaved={(row) => {
-            setConfigured((prev) => ({ ...prev, [row.provider_id]: row }));
-          }}
-          onSaved={(row, message) => {
-            setConfigured((prev) => ({ ...prev, [row.provider_id]: row }));
+          onSaved={(_row, message) => {
             setActiveProvider(null);
             flash(message);
           }}
           onDeleted={(providerId) => {
-            setConfigured((prev) => {
-              const next = { ...prev };
-              delete next[providerId];
-              return next;
-            });
             setActiveProvider(null);
             flash(`Provider ${providerId} and dependent agents/knowledge bases removed.`);
           }}
@@ -655,7 +778,7 @@ function ProvidersTab() {
   );
 }
 
-function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDeleted }) {
+function ProviderModal({ provider, existing, onClose, onSaved, onDeleted }) {
   const queryClient = useQueryClient();
   const invalidateProviderModels = () => queryClient.invalidateQueries({ queryKey: ['provider-models'] });
   
@@ -692,13 +815,12 @@ function ProviderModal({ provider, existing, onKeySaved, onClose, onSaved, onDel
     e.preventDefault();
     setKeyError(null);
     try {
-      const row = await addProviderMutation.mutateAsync({
+      await addProviderMutation.mutateAsync({
         provider_id: provider.provider_id,
         api_key: apiKey.trim(),
       });
       await invalidateProviderModels();
       setKeyStored(true);
-      onKeySaved(row);
       setStep('models');
       setApiKey('');
     } catch (err) {
@@ -1012,6 +1134,7 @@ function AgentsTab() {
   const [formData, setFormData] = useState({
     name: '',
     provider_id: '',
+    execution_mode: 'single',
     planner: '',
     executor: '',
     reviewer: '',
@@ -1021,6 +1144,8 @@ function AgentsTab() {
     finalizer: '',
     workflow_version_id: '',
     max_input_chars: 30000,
+    max_tokens_per_run: 100000,
+    max_tokens_per_node: 8192,
     knowledge_base_ids: [],
   });
   
@@ -1093,9 +1218,12 @@ function AgentsTab() {
     setFormData({
       name: agent?.name || '',
       provider_id: agent?.provider_id || '',
+      execution_mode: config.execution_mode || 'single',
       ...Object.fromEntries(WORKFLOW_ROLES.map((role) => [role, models[role] || ''])),
       workflow_version_id: config.workflow_version_id || '',
       max_input_chars: config.limits?.max_input_chars ?? 30000,
+      max_tokens_per_run: config.limits?.max_tokens_per_run ?? 100000,
+      max_tokens_per_node: config.limits?.max_tokens_per_node ?? 8192,
       context_window_tokens: config.context_window_tokens ?? 4096,
       knowledge_base_ids: config.knowledge_base_ids || [],
     });
@@ -1149,7 +1277,7 @@ function AgentsTab() {
       setGeneratedWorkflowMeta(draft);
       setGeneratedWorkflowName(draft.workflow_name);
       setGeneratedWorkflowDescription(draft.workflow_description || '');
-      flash('Generated an editable Agent and workflow draft. Review it and save the workflow when ready.');
+      flash('Generated the Agent, workflow, and matching sample run request. The server validated the workflow and first-node inputs.');
     } catch (err) { flash(err.message, 'error'); }
     finally { setGeneratingAgentDraft(false); }
   }
@@ -1182,7 +1310,7 @@ function AgentsTab() {
       flash('Please select a provider.', 'error');
       return;
     }
-    if (!formData.workflow_version_id) {
+    if (formData.execution_mode === 'single' && !formData.workflow_version_id) {
       flash('Choose a workflow before saving this agent. Create one from a preset or build a custom workflow in the Workflows section.', 'error');
       return;
     }
@@ -1200,10 +1328,13 @@ function AgentsTab() {
         ...(editingAgent?.config || {}),
         name: formData.name || 'New Agent',
         provider_id: formData.provider_id,
+        execution_mode: formData.execution_mode,
         workflow_version_id: formData.workflow_version_id,
         limits: {
           ...(editingAgent?.config?.limits || {}),
           max_input_chars: Number(formData.max_input_chars) || 30000,
+          max_tokens_per_run: Number(formData.max_tokens_per_run) || 100000,
+          max_tokens_per_node: Number(formData.max_tokens_per_node) || 8192,
         },
         models: Object.fromEntries(WORKFLOW_ROLES.map((role) => [role, formData[role] || null])),
         context_window_tokens: formData.context_window_tokens === 'none'
@@ -1221,6 +1352,7 @@ function AgentsTab() {
       setFormData({
         name: '',
         provider_id: '',
+        execution_mode: 'single',
         planner: '',
         executor: '',
         reviewer: '',
@@ -1230,6 +1362,8 @@ function AgentsTab() {
         finalizer: '',
         workflow_version_id: '',
         max_input_chars: 30000,
+        max_tokens_per_run: 100000,
+        max_tokens_per_node: 8192,
         context_window_tokens: 4096,
         knowledge_base_ids: [],
       });
@@ -1291,27 +1425,41 @@ function AgentsTab() {
               <select className="default-select" value={agentBuilderModel} onChange={(event) => setAgentBuilderModel(event.target.value)}><option value="">Choose model</option>{agentBuilderModels.map((model) => <option key={model} value={model}>{model}</option>)}</select>
               <label className="field-label">Describe the Agent you need</label>
               <textarea className="key-input" rows={4} value={agentBrief} onChange={(event) => setAgentBrief(event.target.value)} placeholder="What should the Agent help with? Describe the kinds of requests it handles, the steps it should take, and the results it should return." />
-              <button type="button" className="btn g" onClick={generateAgentConfiguration} disabled={generatingAgentDraft || !agentBuilderModel || agentBrief.trim().length < 10}>{generatingAgentDraft ? 'Generating draft…' : 'Generate Agent and workflow draft'}</button>
+              {generatingAgentDraft && <div className="workflow-draft-notes" role="status" aria-live="polite"><strong>Generating Agent, workflow, and test request</strong><span>Step 1/2: {selectedProvider?.provider_id || 'Selected provider'} is creating a workflow and realistic run input for its first node. Step 2/2: the server will validate node mappings and workflow structure before the draft appears.</span></div>}
+              <button type="button" className="btn g" onClick={generateAgentConfiguration} disabled={generatingAgentDraft || !agentBuilderModel || agentBrief.trim().length < 10}>{generatingAgentDraft ? 'Generating Agent + workflow + test request…' : 'Generate Agent and workflow draft'}</button>
             </>}
             {!selectedProvider && <span className="field-hint">Select one of your configured providers to choose the model used for drafting.</span>}
           </section>}
           <div style={{ marginBottom: '1rem' }}>
-            <label className="field-label">Workflow</label>
-            <select className="default-select" required value={formData.workflow_version_id || ''} onChange={(e) => { setFormData({ ...formData, workflow_version_id: e.target.value }); setWorkflowDraft(null); setWorkflowEditError(''); }}>
-              <option value="">Select a workflow…</option>
+            <label className="field-label">Execution mode</label>
+            <select className="default-select" value={formData.execution_mode} onChange={(e) => setFormData({ ...formData, execution_mode: e.target.value })}>
+              <option value="single">Single orchestration (current flow)</option>
+              <option value="multi_step">Multi-step (LangGraph)</option>
+            </select>
+            <span className="field-hint">
+              {formData.execution_mode === 'single'
+                ? 'Runs the selected workflow. This is the default and preserves the current orchestration path.'
+                : 'Runs the built-in LangGraph router, planner, executor, and review loop. A workflow is optional; if selected, its assigned custom tools are made available to the graph.'}
+            </span>
+            <label className="field-label" style={{ marginTop: '0.75rem' }}>{formData.execution_mode === 'single' ? 'Workflow' : 'Workflow (optional in Multi-step mode)'}</label>
+            <select className="default-select" required={formData.execution_mode === 'single'} value={formData.workflow_version_id || ''} onChange={(e) => { setFormData({ ...formData, workflow_version_id: e.target.value }); setWorkflowDraft(null); setWorkflowEditError(''); }}>
+              <option value="">{formData.execution_mode === 'single' ? 'Select a workflow' : 'No workflow / built-in tools only'}</option>
               {workflows.map((workflow) => <option key={workflow.version_id} value={workflow.version_id}>{workflow.name} · v{workflow.version}</option>)}
             </select>
-            <span className="field-hint">The workflow defines all nodes, instructions, inputs, transitions, outputs, and per-step tools. To make a registered tool callable: select it on the workflow step, save a new workflow version, then select that version here and save the agent.</span>
+            <span className="field-hint">{formData.execution_mode === 'single'
+              ? 'The selected workflow defines the nodes, prompts, transitions, outputs, and per-step tools.'
+              : 'Multi-step mode does not execute workflow nodes. If selected, a workflow only exposes custom tools assigned to its nodes to the LangGraph.'} To make a registered tool callable, assign it to a workflow step and save a new workflow version.</span>
             {selectedWorkflow && <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
               <button type="button" className="btn g small" onClick={() => { setWorkflowDraft(JSON.stringify(selectedWorkflow.definition, null, 2)); setWorkflowEditError(''); }}>Edit workflow here</button>
               {workflowDraft !== null && <button type="button" className="btn g small" onClick={() => { setWorkflowDraft(null); setWorkflowEditError(''); }}>Discard workflow edits</button>}
             </div>}
             {selectedWorkflow && <div style={{ marginTop: '0.75rem', border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '0.75rem' }}>
-              <strong>Workflow nodes ({selectedWorkflow.definition.nodes.length})</strong>
+              <strong>{formData.execution_mode === 'single' ? `Workflow nodes (${selectedWorkflow.definition.nodes.length})` : 'Attached workflow (nodes are not run in Multi-step mode)'}</strong>
               <ol style={{ margin: '0.5rem 0 0', paddingLeft: '1.4rem' }}>{selectedWorkflow.definition.nodes.map((node) => <li key={node.id}><strong>{node.name || node.id}</strong> <span className="field-hint">({node.role}) · {node.id} · Tools: {(node.tools || []).join(', ') || 'none assigned'}</span></li>)}</ol>
             </div>}
             {workflowDraft !== null && <div style={{ marginTop: '0.75rem' }}>
-              {generatedWorkflowMeta && <div className="workflow-draft-notes"><strong>AI generated draft — nothing is saved until you choose below</strong><span>Drafted with {agentBuilderModel} via {selectedProvider?.provider_id}. You can edit every field in the workflow JSON before saving it.</span><label className="field-label">Workflow name</label><input className="key-input" value={generatedWorkflowName} onChange={(event) => setGeneratedWorkflowName(event.target.value)} /><label className="field-label">Workflow description</label><input className="key-input" value={generatedWorkflowDescription} onChange={(event) => setGeneratedWorkflowDescription(event.target.value)} /><strong>Suggested Agent: {generatedWorkflowMeta.agent?.name}</strong><span>{generatedWorkflowMeta.agent?.purpose}</span>{[...(generatedWorkflowMeta.assumptions || []), ...(generatedWorkflowMeta.questions || []), ...(generatedWorkflowMeta.setup_notes || [])].length > 0 && <ul>{[...(generatedWorkflowMeta.assumptions || []).map((item) => `Assumption: ${item}`), ...(generatedWorkflowMeta.questions || []).map((item) => `Question: ${item}`), ...(generatedWorkflowMeta.setup_notes || []).map((item) => `Setup: ${item}`)].map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>}
+              {generatedWorkflowMeta && <div className="workflow-draft-notes"><strong>AI generated draft — nothing is saved until you choose below</strong><span>Drafted with {agentBuilderModel} via {selectedProvider?.provider_id}. Workflow structure and the sample run request were validated by the server.</span><label className="field-label">Workflow name</label><input className="key-input" value={generatedWorkflowName} onChange={(event) => setGeneratedWorkflowName(event.target.value)} /><label className="field-label">Workflow description</label><input className="key-input" value={generatedWorkflowDescription} onChange={(event) => setGeneratedWorkflowDescription(event.target.value)} /><strong>Suggested Agent: {generatedWorkflowMeta.agent?.name}</strong><span>{generatedWorkflowMeta.agent?.purpose}</span>{[...(generatedWorkflowMeta.assumptions || []), ...(generatedWorkflowMeta.questions || []), ...(generatedWorkflowMeta.setup_notes || [])].length > 0 && <ul>{[...(generatedWorkflowMeta.assumptions || []).map((item) => `Assumption: ${item}`), ...(generatedWorkflowMeta.questions || []).map((item) => `Question: ${item}`), ...(generatedWorkflowMeta.setup_notes || []).map((item) => `Setup: ${item}`)].map((item, index) => <li key={index}>{item}</li>)}</ul>}</div>}
+              {generatedWorkflowMeta && <GeneratedTestRunRequest request={generatedWorkflowMeta.test_run_request} />}
               <label className="field-label">Workflow definition (JSON)</label>
               <textarea className="key-input" rows={18} value={workflowDraft} onChange={(event) => setWorkflowDraft(event.target.value)} spellCheck={false} />
               <span className="field-hint">Edit every node’s role instructions, mapped inputs, output contract, tools, transitions, and limits here.</span>
@@ -1374,6 +1522,18 @@ function AgentsTab() {
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Maximum tokens per run</label>
+            <input className="key-input" type="number" min="1" max="1000000" value={formData.max_tokens_per_run ?? 100000} onChange={(e) => setFormData({ ...formData, max_tokens_per_run: Number(e.target.value) || 100000 })} />
+            <span className="field-hint">Total usage budget across every node and model call in one run. Default: 100,000.</span>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
+            <label className="field-label">Default completion tokens per node</label>
+            <input className="key-input" type="number" min="1" max="200000" value={formData.max_tokens_per_node ?? 8192} onChange={(e) => setFormData({ ...formData, max_tokens_per_node: Number(e.target.value) || 8192 })} />
+            <span className="field-hint">Workflow nodes inherit this output cap unless the node sets its own completion token override. Default: 8,192.</span>
+          </div>
+
+          <div style={{ marginBottom: '1rem' }}>
             <label className="field-label">Context Budget (tokens)</label>
             <select
               className="default-select"
@@ -1418,7 +1578,7 @@ function AgentsTab() {
             </div>
           )}
 
-          <p className="field-hint" style={{ marginBottom: "1rem" }}>Workflow nodes own role instructions, tools, inputs, outputs, and transitions. Agent settings supply the provider, model for each role, knowledge bases, and runtime limits.</p>
+          <p className="field-hint" style={{ marginBottom: "1rem" }}>Execution mode selects the current single-orchestration workflow or the multi-step LangGraph. Workflow nodes own role instructions, tools, inputs, outputs, and transitions; Agent settings supply models, knowledge bases, and runtime limits.</p>
 
           <div className="modal-actions">
             <button type="button" className="btn g" onClick={() => { setIsCreating(false); setEditingAgent(null); }}>
@@ -1489,11 +1649,12 @@ function AgentsTab() {
                   <div style={{ flex: 1 }}>
                     <div className="provider-name" style={{ fontWeight: 600 }}>{agent.name}</div>
                     <span className="provider-badge ok">Provider: {providerName}</span>
+                    <span className="provider-badge">{agent.config?.execution_mode === 'multi_step' ? 'Multi-step (LangGraph)' : 'Single orchestration'}</span>
                   </div>
                 </div>
                 <div className="agent-id-row"><strong>Agent ID</strong><code>{agent.id}</code><button className="btn g small" type="button" onClick={() => navigator.clipboard.writeText(agent.id)}>Copy</button></div>
                 <div className="agent-tools-summary">
-                  <strong>Tools available to workflow steps</strong>
+                  <strong>{agent.config?.execution_mode === 'multi_step' ? 'Tools available to LangGraph' : 'Tools available to workflow steps'}</strong>
                   {agentWorkflow?.definition?.nodes?.some((node) => (node.tools || []).length > 0) ? agentWorkflow.definition.nodes.filter((node) => (node.tools || []).length > 0).map((node) => <div key={node.id} className="agent-tool-step"><span>{node.name || node.id} ({node.role})</span><span>{node.tools.map((name) => <span key={name} className={!knownToolNames.has(name) ? 'agent-tool-missing' : name === 'semantic_search' && !kbIds.length ? 'agent-tool-missing' : ''}>{name}{!knownToolNames.has(name) ? ' — not registered' : name === 'semantic_search' && !kbIds.length ? ' — no knowledge base attached' : ''}</span>)}</span></div>) : <span className="field-hint">No tools are assigned to this workflow. Registering tools alone does not make them callable; check the tools on the workflow step that needs them.</span>}
                 </div>
                 {models && (
@@ -1590,8 +1751,16 @@ function IntegrationTab() {
             if (step) {
               step.status = type === 'workflow_step_completed' ? 'succeeded' : 'failed';
               if (type === 'workflow_step_completed') step.output = data.output;
-              else step.error = data.error;
+              else {
+                step.error = data.error;
+                if (step.output_repair) step.output_repair.status = 'repair failed';
+              }
+              if (type === 'workflow_step_completed' && step.output_repair) step.output_repair.status = 'repaired';
             }
+            showProgress();
+          } else if (type === 'workflow_step_output_repair') {
+            const step = [...steps].reverse().find((item) => item.node_id === data.node_id && item.status === 'running');
+            if (step) step.output_repair = { status: 'format repair requested', attempt: data.attempt, reason: data.reason };
             showProgress();
           } else if (type === 'run_completed' || type === 'run_failed') {
             terminal = { status: data.status || (type === 'run_completed' ? 'done' : 'failed'), result: data.result || data.output };

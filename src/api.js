@@ -32,6 +32,8 @@ async function request(path, { method = 'GET', body, auth = false, headers: extr
         : `Request failed (${res.status})`;
     const error = new Error(detail);
     error.status = res.status;
+    error.stage = data.detail && typeof data.detail === 'object' ? data.detail.stage : null;
+    error.details = data.detail && typeof data.detail === 'object' ? (data.detail.errors || null) : null;
     throw error;
   }
   return data;
