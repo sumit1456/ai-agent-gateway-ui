@@ -45,41 +45,10 @@ const API_LINES = [
   [{ v: '{ ' }, { t: 's', v: '"input"' }, { v: ': ' }, { t: 's', v: '"Merge pages 2-4 and rotate"' }, { v: ' }' }],
 ];
 
-const STEPS = [
-  {
-    num: '01',
-    title: 'Register',
-    text: 'Create an account and spin up an agent in seconds — one per app, workflow, or customer.',
-  },
-  {
-    num: '02',
-    title: 'Configure',
-    text: 'Pick a base template, add your prompt config, and attach tools. Building a PDF editor? Drop in the preset and extend it.',
-  },
-  {
-    num: '03',
-    title: 'Integrate',
-    text: 'Call the gateway API from your app. We handle execution, tool calls, retries and state.',
-  },
-];
-
-const FEATURES = [
-  {
-    title: 'Bring your own tools',
-    text: 'Plug in your own functions and endpoints. Your agent calls them like any native tool.',
-  },
-  {
-    title: 'Built-in gateway tools',
-    text: 'A growing library of tools we host and maintain, ready for any agent to call.',
-  },
-  {
-    title: 'Managed agent architecture',
-    text: 'Planning, routing, memory and the pipeline internals are ours to run and improve — you never touch them.',
-  },
-  {
-    title: 'Prompt & config presets',
-    text: 'Start from use-case templates (PDF editor, support, research) and layer your own instructions on top.',
-  },
+const RUN_STAGES = [
+  { num: "01", title: "Send a request", text: "Your application sends input to an agent through the gateway API, with session context for the conversation." },
+  { num: "02", title: "Orchestrate the work", text: "The gateway runs the configured agent or workflow, routes work between steps, and gives each step its assigned tools." },
+  { num: "03", title: "Follow the result", text: "Stream step progress and the final result, then inspect inputs, outputs, timing, and token usage in Runs." },
 ];
 
 export default function Landing() {
@@ -88,7 +57,6 @@ export default function Landing() {
       <header className="hero">
         <BlackholeGargantua
           className="hero-blackhole"
-          positionX={() => (window.innerWidth <= 820 ? 0.52 : 0.995)}
         />
         <div className="wrap hero-layout">
           <div className="hero-copy">
@@ -101,7 +69,7 @@ export default function Landing() {
               let the gateway handle orchestration.
             </p>
             <div className="cta">
-              <a className="btn p" href="#/register">
+              <a className="btn p" href="/register">
                 Get early access <span aria-hidden="true">↗</span>
               </a>
               <a className="btn g" href="#api">
@@ -119,41 +87,22 @@ export default function Landing() {
         </div>
       </header>
 
-      <section id="how">
+      <section id="run-lifecycle">
         <div className="wrap">
           <Reveal>
-            <span className="eyebrow">How it works</span>
-            <h2>Three steps. Zero pipeline code.</h2>
+            <span className="eyebrow">Inside a run</span>
+            <h2>From request to result, with every step in view.</h2>
             <p className="lead">
-              The heavy lifting stays inside the gravity well. You only configure what makes your
-              agent yours.
+              Your app sends the task. The gateway manages execution and returns progress you can follow.
             </p>
           </Reveal>
           <BlackHoleParticleField className="section-blackhole" />
           <div className="grid g3">
-            {STEPS.map((s) => (
+            {RUN_STAGES.map((s) => (
               <Reveal className="card" key={s.num}>
                 <span className="num">{s.num}</span>
                 <h3>{s.title}</h3>
                 <p>{s.text}</p>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="features">
-        <div className="wrap">
-          <Reveal>
-            <span className="eyebrow">Features</span>
-            <h2>Flexible on the surface. Heavy inside.</h2>
-            <p className="lead">Bring what you have, borrow what we&apos;ve built.</p>
-          </Reveal>
-          <div className="grid g2">
-            {FEATURES.map((f) => (
-              <Reveal className="card" key={f.title}>
-                <h3>{f.title}</h3>
-                <p>{f.text}</p>
               </Reveal>
             ))}
           </div>
@@ -208,7 +157,7 @@ export default function Landing() {
           <Reveal>
             <h2>Ready to cross the horizon?</h2>
             <p>Join the early access list and build your first agent on the gateway.</p>
-            <a className="btn p" href="#/register">
+            <a className="btn p" href="/register">
               Request access
             </a>
           </Reveal>

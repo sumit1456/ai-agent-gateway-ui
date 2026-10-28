@@ -158,6 +158,7 @@
   border-color: rgba(255, 169, 87, 0.27);
   background: rgba(255, 145, 56, 0.07);
   backdrop-filter: blur(12px);
+  font-size: 11.4px;
 }
 
 .hero .tag i,
@@ -190,7 +191,7 @@
 
 .hero h1 {
   max-width: 760px;
-  font-size: clamp(48px, 6.2vw, 88px);
+  font-size: clamp(45.6px, 5.89vw, 83.6px);
   line-height: 0.99;
   margin: 28px 0 22px;
   letter-spacing: -0.065em;
@@ -208,7 +209,7 @@ h1 span {
   max-width: 540px;
   margin: 0 0 30px;
   color: #a6a4b7;
-  font-size: clamp(16px, 1.45vw, 19px);
+  font-size: clamp(15.2px, 1.3775vw, 18.05px);
   line-height: 1.75;
 }
 
@@ -226,11 +227,11 @@ h1 span {
   justify-content: center;
   gap: 12px;
   padding: 13px 23px;
-  font-size: 14px;
+  font-size: 13.3px;
 }
 
 .hero .btn.p span {
-  font-size: 17px;
+  font-size: 16.15px;
   transition: transform 0.2s ease;
 }
 
@@ -250,7 +251,7 @@ h1 span {
   gap: 12px 23px;
   margin-top: 36px;
   color: #aaa8b8;
-  font-size: 12px;
+  font-size: 11.4px;
   letter-spacing: 0.015em;
 }
 
@@ -275,7 +276,7 @@ h1 span {
   align-items: center;
   gap: 10px;
   color: rgba(240, 228, 213, 0.72);
-  font: 500 10px 'JetBrains Mono', monospace;
+  font: 500 9.5px 'JetBrains Mono', monospace;
   letter-spacing: 0.16em;
   text-shadow: 0 2px 14px #040409;
 }
@@ -294,7 +295,7 @@ h1 span {
   align-items: center;
   gap: 10px;
   color: #777587;
-  font-size: 11px;
+  font-size: 10.45px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -687,13 +688,13 @@ footer .wrap {
 
   .hero h1 {
     max-width: 630px;
-    font-size: clamp(48px, 9vw, 72px);
+    font-size: clamp(45.6px, 8.55vw, 68.4px);
     margin-top: 24px;
   }
 
   .hero .sub {
     max-width: 560px;
-    font-size: 16px;
+    font-size: 15.2px;
   }
 
   .hero-art-label {
@@ -725,12 +726,12 @@ footer .wrap {
   }
 
   .hero .tag {
-    font-size: 10px;
+    font-size: 9.5px;
     letter-spacing: 0.1em;
   }
 
   .hero h1 {
-    font-size: clamp(43px, 11.5vw, 58px);
+    font-size: clamp(40.85px, 10.925vw, 55.1px);
     line-height: 1.02;
     letter-spacing: -0.055em;
   }
@@ -738,7 +739,7 @@ footer .wrap {
   .hero-capabilities {
     gap: 9px 15px;
     margin-top: 25px;
-    font-size: 10px;
+    font-size: 9.5px;
   }
 
   .hero-art-label {

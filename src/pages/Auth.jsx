@@ -94,11 +94,11 @@ export default function Auth({ mode = 'register' }) {
               <p className="auth-switch">
                 {isLogin ? (
                   <>
-                    Don&apos;t have an account? <a href="#/register">Register</a>
+                    Don&apos;t have an account? <a href="/register">Register</a>
                   </>
                 ) : (
                   <>
-                    Already have an account? <a href="#/login">Log in</a>
+                    Already have an account? <a href="/login">Log in</a>
                   </>
                 )}
               </p>

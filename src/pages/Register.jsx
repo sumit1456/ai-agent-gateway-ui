@@ -38,7 +38,7 @@ export default function Register() {
       setForm({ name: '', username: '', email: '', organization: '', password: '', confirmPassword: '' });
       // Redirect to login page
       setTimeout(() => {
-        window.location.hash = '#/login';
+        window.location.assign('/login');
       }, 1500);
     } catch (err) {
       setMessage({ kind: 'error', text: err.message });
@@ -167,7 +167,7 @@ export default function Register() {
 
           <p className="auth-switch">
             Already have an account?{' '}
-            <a href="#/login">Log in</a>
+            <a href="/login">Log in</a>
           </p>
         </div>
       </section>

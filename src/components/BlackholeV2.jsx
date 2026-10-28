@@ -2,34 +2,23 @@ import React, { useEffect, useRef } from 'react';
 
 /* ============================================================================
    CONTROL PANEL — change values here, everything below reads from them.
-
-   QUICK FIND (search for these words):
-     BLACK HOLE RADIUS / SIZE (one knob) ... BLACK_HOLE_RADIUS  <- scales rings, halo and planet size together (same rule as hr = Math.min(W*0.8,H)*0.02)
-     distortion halo (swirling space) ...... DISTORTION_*, STAR_SMEAR_*, STAR_BLUR_*, HAZE_*, RIM_GLOW_*
-     black hole position ................... BLACK_HOLE_POSITION_*
-     ring rotation speed ................... RING_ROTATION_SPEED, RING_ROTATION_DIRECTION,
-                                             UPPER_RING_ROTATION_SPEED_MULTIPLIER,
-                                             LOWER_RING_ROTATION_SPEED_MULTIPLIER
-     upper ring thickness .................. UPPER_RING_THINNING
-     lower ring thickness .................. LOWER_RING_THINNING
-     ring brightness / ring clumps ......... DISK_BRIGHTNESS, RING_CLUMP_*
-     planet size / orbit size / speed ...... PLANETS, PLANET_ORBIT_SPEED
-     canvas size ........................... plain CSS on the <canvas> (className or #bh). The black hole scales to whatever size you give it
-
-   Units: shader "world" units use the black hole radius (event horizon) = 1,
-   so RING_INNER_RADIUS = 2.6 means "2.6 black hole radii from the centre".
-
-   CSS: the component is ONE <canvas id="bh" className={className}>, exactly like the canvas version.
-   Size it with your own CSS (width / height / position ...), e.g.  #bh { width: 100%; height: 320px; }
-   Colours can be overridden in CSS too (set on the canvas or any parent):
-     --blackhole-orbit-line-color       e.g. rgba(255,255,255,.12)
-     --blackhole-planet-1-lit-color     (also -2-, -3-, ...)
-     --blackhole-planet-1-shadow-color
+   Usage: <BlackholeGargantua className="my-canvas" />  (size the canvas with your own CSS)
+   Props: className, id, style, positionX (0..1 or fn(width)), positionY (0..1 from bottom),
+          rotation (degrees), tilt (radians), transparentBackground
    ========================================================================== */
 
+// ---- Feature toggles (true / false) ------------------------------------------
+const SPACE_WRAP_EFFECT = true;   // swirling, smeared stars around the hole (false = plain lensed stars)
+const SHADOW_GLOW = true;         // faint lensed glow inside the shadow (false = pure black)
+const RING_STREAKS = true;        // gas smeared along its rotation (false = clumpy dots)
+const LOWER_RING_FIX = true;      // dim, thin lower image so it doesn't look like a donut
+const LOWER_RING_DETAIL = true;   // show the lower disk as rotating gas streams instead of a smooth band
+const PHOTON_RING = true;         // thin bright line hugging the shadow
+const STARS = false;               // background star field
+const WRAP_HAZE = true;          // keep the effect tight; no broad haze layer
+
 // ---- Render quality ------------------------------------------------------------
-// Set to 'high', 'medium', 'low', or 'auto'. Auto uses device hints at startup.
-const RENDER_MODE = 'low';
+const RENDER_MODE = 'medium';     // 'high' | 'medium' | 'low' | 'auto'
 const RENDER_QUALITY = {
   high: { pixelRatio: 1.25, rayMarchSteps: 170 },
   medium: { pixelRatio: 1.0, rayMarchSteps: 150 },
@@ -42,106 +31,54 @@ const getRenderMode = () => {
   const memory = navigator.deviceMemory || 4;
   return cores <= 4 || memory <= 4 ? 'low' : cores <= 8 || memory <= 8 ? 'medium' : 'high';
 };
-const ACTIVE_RENDER_QUALITY = RENDER_QUALITY[getRenderMode()];
-const MAX_PIXEL_RATIO = ACTIVE_RENDER_QUALITY.pixelRatio; // lower values shade fewer pixels
+const ACTIVE_QUALITY = RENDER_QUALITY[getRenderMode()];
+const MAX_PIXEL_RATIO = ACTIVE_QUALITY.pixelRatio;
+const RAY_MARCH_STEPS = ACTIVE_QUALITY.rayMarchSteps; // keep >= 140 to preserve the lensing silhouette
 
-// ---- Black hole size & position -----------------------------------------------
-const BLACK_HOLE_RADIUS = 0.4;              // ★ BLACK HOLE RADIUS / SIZE: this x min(0.8 x canvas width, canvas height).
-//   Same rule as the canvas version (hr = Math.min(W * 0.8, H) * 0.02): 0.02 here = the same radius as 0.02 there.
-//   Rings, distortion halo and planet size scale with it. To make everything smaller you can also just shrink the canvas in CSS.
-const BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION = 0.8; // the 0.8 in the rule above
-const BLACK_HOLE_SHADOW_RADIUS = 4.06;         // calibration (measured): apparent shadow radius in world units. Leave as is.
-const BLACK_HOLE_POSITION_X_FRACTION = 0.5;    // black hole position: 0 = left edge, 1 = right edge
-const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION = 0.63; // black hole position: 0 = bottom, 1 = top (0.63 = 37% down from the top, like the canvas version)
-const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW = 0.7; // same, used when the canvas is narrower than the width below (30% down)
-const NARROW_CANVAS_MAX_WIDTH_PX = 700;        // canvas narrower than this counts as "narrow" (phones)
+// ---- Size & position -----------------------------------------------------------
+const BLACK_HOLE_RADIUS = 0.21;   // ★ SIZE: shadow radius = this x min(0.8 x canvas width, canvas height)
+const BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION = 0.8;
+const BLACK_HOLE_SHADOW_RADIUS = 4.06; // calibration (measured). Leave as is.
+const BLACK_HOLE_POSITION_X_FRACTION = 0.5;
+const BLACK_HOLE_POSITION_X_FRACTION_NARROW = 0.62;
+const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION = 0.5;
+const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW = 0.6;
+const NARROW_CANVAS_MAX_WIDTH_PX = 700;
+const NARROW_VIEWPORT_MAX_WIDTH_PX = 820;
+const CAMERA_TILT_RADIANS = 0.13; // 0 = edge-on
+const CAMERA_DISTANCE = 30;
 
-// ---- Camera -----------------------------------------------------------------
-const CAMERA_TILT_RADIANS = 0.1;               // 0 = edge-on, 1.57 = looking straight down (low = NASA-style flat view)
-const CAMERA_DISTANCE = 30;                    // distance from the black hole (changing it does not change the on-screen black hole size; that is BLACK_HOLE_RADIUS)
+// ---- Rings ----------------------------------------------------------------------
+const RING_INNER_RADIUS = 2.6;
+const DISK_OUTER_RADIUS = 12.0;
+const RING_ROTATION_SPEED = 15.5;  // matched to BlackholeImproved's visible ring speed; 0 = frozen
+const STREAK_LENGTH = 1.5;        // retain streaks while keeping their movement visible
+const DISK_BRIGHTNESS = 1.6;
+const DISK_EXPOSURE = 1.5;
+const UPPER_RING_THINNING = 0.2; // lower = thicker upper arch
+const LOWER_RING_BRIGHTNESS = 1; // match the upper disk's overall brightness
+const LOWER_RING_THINNING = UPPER_RING_THINNING; // keep the lower ring's color profile; brightness is controlled separately
+const SHADOW_GLOW_STRENGTH = 0.5;
 
-// ---- Rings (accretion disk) shape -------------------------------------------
-const RING_INNER_RADIUS = 2.6;                 // inner edge of the glowing ring, in black hole radii
-const DISK_OUTER_RADIUS = 16.0;                // outer edge of the ring, in black hole radii: wider = longer flat tails + taller upper ring
-const DISK_OUTER_FADE_WIDTH = 5.5;             // slightly tighter fade for a cleaner silhouette
-const LOWER_DISK_OUTER_RADIUS = 9.0;           // keep the lensed underside close to the horizon instead of a full donut
-const LOWER_DISK_OUTER_FADE_WIDTH = 3.0;
-const DISK_BRIGHTNESS_FALLOFF = 0.9;           // lower = outer ring stays bright (broader upper ring)
+// ---- Space wrap ------------------------------------------------------------------
+const WRAP_OPACITY = 1;        // barely visible lensing around the shadow
+const WRAP_SPEED = 0.7;          // swirl speed at the hole edge, rad/s
+const WRAP_RADIUS = 3;          // keep the wrap close to the black hole
+const WRAP_CLOCKWISE = true;
 
-// ---- Ring thickness (upper ring = arch over the top, lower ring = half ring underneath) ----
-const UPPER_RING_THINNING = 0.15;
-const LOWER_RING_THINNING = 0.9;               // reduce energy in the lensed underside
-const LOWER_RING_BRIGHTNESS = 0.82;
-
-// ---- Ring rotation ------------------------------------------------------------
-const RING_ROTATION_SPEED = 3.8;               // RING ROTATION SPEED for the whole ring (0 = frozen, higher = faster; inner part always spins faster)
-const RING_ROTATION_DIRECTION = 1.0;           // 1 or -1: flips the rotation direction and which side is bright (Doppler)
-const UPPER_RING_ROTATION_SPEED_MULTIPLIER = 1.0; // extra ring rotation speed for the upper ring only (and the flat front band)
-const LOWER_RING_ROTATION_SPEED_MULTIPLIER = 1.0; // extra ring rotation speed for the lower ring only (1 = same, 2 = twice as fast)
-const RING_CLUMP_COUNT = 38;                   // broader, smoother structures instead of dense striping
-//   (the lower ring is stretched by lensing, so low values look "stuck")
-const RING_CLUMP_BASE_BRIGHTNESS = 0.48;
-const RING_CLUMP_CONTRAST = 0.78;
-
-// ---- Ring brightness & quality ---------------------------------------------------
-const DISK_BRIGHTNESS = 1.7;                   // overall ring glow
-const DISK_EXPOSURE = 1.5;                     // higher = hotter / more washed out
-const RAY_MARCH_STEPS = ACTIVE_RENDER_QUALITY.rayMarchSteps; // keep >= 140 to preserve the lensing silhouette
-
-// ring colour ramp, cool -> white-hot  [r, g, b] 0..1
-const DISK_COLOR_COOL = [0.45, 0.05, 0.0];
-const DISK_COLOR_WARM = [1.0, 0.42, 0.04];
-const DISK_COLOR_GOLD = [1.0, 0.82, 0.45];
-const DISK_COLOR_WHITE_HOT = [1.0, 0.97, 0.9];
-
-// ---- Stars & space ----------------------------------------------------------
-// ---- Distortion halo (transparent swirling space around the black hole) --------
-const DISTORTION_EFFECT_ENABLED = false;        // true / false: turn the whole distortion effect on or off (off = plain static stars, no swirl, no haze, no glow)
-const DISTORTION_OPACITY = 0.35;               // 0..1: how visible the distortion is. Lower = more transparent (0.35 = subtle, 1 = full strength)
-const DISTORTION_HALO_RADIUS = 8.0;            // how far the swirl reaches, in black hole radii (must be > 0)
-const DISTORTION_ROTATION_SPEED = 0.35;        // DISTORTION ROTATION SPEED at the black hole edge, rad/s (0 = frozen). Farther out is slower
-const DISTORTION_CLOCKWISE = true;
-const DISTORTION_FALLOFF_POWER = 1.5;          // higher = swirl fades faster with distance (1.5 = Kepler-like)
-const STAR_SMEAR_ANGLE = 0.6;                  // star trail length: radians of rotation smeared at the black hole edge (0 = round dots)
-const STAR_SMEAR_SAMPLES = 10;                 // trail smoothness (whole number >= 2; higher = smoother but slower)
-const STAR_TRAIL_BRIGHTNESS = 1.4;             // keeps long star trails visible
-const STAR_BLUR_NEAR_BLACK_HOLE = 0.9;         // 0 = sharp stars everywhere, 1 = stars turn soft/blurry near the black hole
-const HAZE_STRENGTH = 0.34;                    // transparent swirling haze opacity (0 = off)
-const HAZE_COLOR = [0.45, 0.55, 0.9];
-const HAZE_PATCH_COUNT = 9;                    // whole number: patches around the ring (fewer = bigger clouds)
-const HAZE_RADIAL_FREQUENCY = 1.1;             // higher = thinner concentric bands
-const HAZE_CYCLE_SECONDS = 10;                 // how often the haze pattern refreshes (keeps it from winding up)
-const RIM_GLOW_STRENGTH = 0.55;                // thin bright glow hugging the black hole edge (0 = off)
-const RIM_GLOW_WIDTH = 0.12;                   // in black hole radii
-const RIM_GLOW_COLOR = [1.0, 0.8, 0.55];
-
-// ---- Stars & space ----------------------------------------------------------
-const STAR_DENSITY = 0;                     // share of sky cells holding a star (higher = more stars)
-const STAR_GRID = 110;                         // star cells per radian (lower = bigger stars)
-const STAR_BRIGHTNESS = 0.9;
-const STAR_COLOR = [0.8, 0.85, 1.0];
-const SPACE_TINT_COLOR = [0.016, 0.016, 0.036];
-
-// ---- Planets & planet orbit rotation (drawn inside the same canvas) -----------
+// ---- Planets (drawn by the shader, off by default) ---------------------------------
 const PLANETS_ENABLED = false;
-const PLANET_ORBIT_SPEED = 0.25;               // PLANET ORBIT ROTATION SPEED, global (rad/s for an orbit at PLANET_ORBIT_SPEED_REFERENCE_FRACTION; inner orbits are faster)
-const PLANET_ORBIT_SPEED_REFERENCE_FRACTION = 0.86; // the orbitWidthFraction that moves at exactly PLANET_ORBIT_SPEED
-const PLANET_ORBIT_MAX_WIDTH_FRACTION = 0.48;  // an orbit with orbitWidthFraction 1 reaches this share of the canvas width on each side of the black hole
+const PLANET_ORBIT_SPEED = 0.25;
+const PLANET_ORBIT_SPEED_REFERENCE_FRACTION = 0.86;
+const PLANET_ORBIT_MAX_WIDTH_FRACTION = 0.48;
 const PLANET_ORBIT_CLOCKWISE = true;
-const ORBIT_FLATTENING_RATIO = 0.18;           // 1 = circle, small = flat like the ring (kept rounder than the tilt so orbits stay readable)
-const NEAR_SIDE_SIZE_BOOST = 0.35;             // planets grow by this much on the viewer-facing side
-const PLANET_LIGHT_SHIFT = 0.4;                // 0..1, highlight shift toward the black hole
-
-const ORBIT_LINE_VISIBLE = false;              // true = draw a faint line along each planet's orbit
+const ORBIT_FLATTENING_RATIO = 0.18;
+const NEAR_SIDE_SIZE_BOOST = 0.35;
+const PLANET_LIGHT_SHIFT = 0.4;
+const ORBIT_LINE_VISIBLE = false;
 const ORBIT_LINE_WIDTH_PX = 1;
 const ORBIT_LINE_COLOR = 'rgba(255,255,255,0.10)';
-
 const PLANETS = [
-  // orbitWidthFraction : orbit half-width as a share of the canvas half-width (like the canvas version). 1 = near the edge. Scales with the canvas
-  // radiusInShadowRadii: PLANET SIZE as a share of the black hole radius (scales with BLACK_HOLE_RADIUS)
-  // speedMultiplier    : per-planet orbit rotation speed on top of PLANET_ORBIT_SPEED
-  // startAngleRadians  : null = random
-  // flatteningRatio    : null = use ORBIT_FLATTENING_RATIO
   { name: 'ember', orbitWidthFraction: 0.74, radiusInShadowRadii: 0.02, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#e0b27a', shadowColor: '#5a3a22' },
   { name: 'ocean', orbitWidthFraction: 0.86, radiusInShadowRadii: 0.03, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#9cc4ee', shadowColor: '#1c3a66' },
   { name: 'rust', orbitWidthFraction: 0.97, radiusInShadowRadii: 0.023, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#d98a70', shadowColor: '#4a2219' },
@@ -150,22 +87,19 @@ const PLANETS = [
 /* ========================================================================== */
 
 const TAU = Math.PI * 2;
-const glslFloat = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
-const glslVec3 = (c) => `vec3(${c.map(glslFloat).join(',')})`;
-
-// ---- DERIVED (don't edit): everything below follows from BLACK_HOLE_RADIUS ----
-const SHADOW_SCREEN_RADIUS = BLACK_HOLE_SHADOW_RADIUS / Math.sqrt(CAMERA_DISTANCE * CAMERA_DISTANCE - BLACK_HOLE_SHADOW_RADIUS * BLACK_HOLE_SHADOW_RADIUS);
+const gf = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+const gb = (v) => (v ? '1.' : '0.');
+const SSR = BLACK_HOLE_SHADOW_RADIUS / Math.sqrt(CAMERA_DISTANCE * CAMERA_DISTANCE - BLACK_HOLE_SHADOW_RADIUS * BLACK_HOLE_SHADOW_RADIUS);
 const PLANET_COUNT = PLANETS_ENABLED ? PLANETS.length : 0;
 
-// planets are drawn by the shader itself (so the component can be a single <canvas>)
 const PLANET_UNIFORMS_GLSL = PLANET_COUNT > 0
-  ? `uniform vec4 PL[${PLANET_COUNT}];   // planet x, y (device px, y up), radius px
-uniform vec3 PA[${PLANET_COUNT}];   // lit colour
-uniform vec3 PB[${PLANET_COUNT}];   // shadow colour
-uniform vec2 HC;                    // black hole centre, device px
-${ORBIT_LINE_VISIBLE ? `uniform vec2 PO[${PLANET_COUNT}];   // orbit ellipse half-axes, device px
-uniform vec4 LC;                    // orbit line colour (rgb) + opacity
-uniform float LW;                   // orbit line width, device px` : ''}`
+  ? `uniform vec4 PL[${PLANET_COUNT}];
+uniform vec3 PA[${PLANET_COUNT}];
+uniform vec3 PB[${PLANET_COUNT}];
+uniform vec2 HC;
+${ORBIT_LINE_VISIBLE ? `uniform vec2 PO[${PLANET_COUNT}];
+uniform vec4 LC;
+uniform float LW;` : ''}`
   : '';
 const PLANET_GLSL = PLANET_COUNT > 0
   ? `
@@ -180,7 +114,7 @@ ${ORBIT_LINE_VISIBLE ? ` for(int i=0;i<${PLANET_COUNT};i++){
   float a=1.-smoothstep(rad-.7,rad+.7,length(fc-PL[i].xy));
   if(a>0.){
    vec2 toHole=HC-PL[i].xy;
-   vec2 hl=PL[i].xy+toHole/max(length(toHole),1.)*rad*${glslFloat(PLANET_LIGHT_SHIFT)};
+   vec2 hl=PL[i].xy+toHole/max(length(toHole),1.)*rad*${gf(PLANET_LIGHT_SHIFT)};
    float t=clamp(length(fc-hl)/rad,0.,1.);
    outc=mix(outc,mix(PA[i],PB[i],t),a);
   }
@@ -188,303 +122,268 @@ ${ORBIT_LINE_VISIBLE ? ` for(int i=0;i<${PLANET_COUNT};i++){
 `
   : '';
 
-const ESCAPED_RAY_GLSL = DISTORTION_EFFECT_ENABLED
+const ESCAPED_GLSL = SPACE_WRAP_EFFECT
   ? `
- if(esc){
-  vec3 dir=normalize(vel);
-  float rho=length(uv)*${glslFloat(1 / SHADOW_SCREEN_RADIUS)};
   float r1=max(rho,1.);
-  float halo=${glslFloat(Math.max(DISTORTION_HALO_RADIUS, 0.01))};
-  float env=1.-smoothstep(halo*.4,halo,rho);
-  float fall=pow(1./r1,${glslFloat(DISTORTION_FALLOFF_POWER)});
-  float omega=${glslFloat(DISTORTION_ROTATION_SPEED)}*fall*env;
-  float smear=${glslFloat(STAR_SMEAR_ANGLE)}*fall*env;
-  float soft=${glslFloat(STAR_BLUR_NEAR_BLACK_HOLE)}*env/r1;
-  float dirn=${DISTORTION_CLOCKWISE ? '1.' : '-1.'};
+  float env=1.-smoothstep(${gf(WRAP_RADIUS)}*.4,${gf(WRAP_RADIUS)},rho);
+  float fall=pow(1./r1,1.5);
+  float om=${gf(WRAP_SPEED)}*fall*env, sm=.6*fall*env;
+  float dirn=${WRAP_CLOCKWISE ? '1.' : '-1.'};
   float acc=0.;
-  for(int k=0;k<${Math.max(2, Math.round(STAR_SMEAR_SAMPLES))};k++){
-   float f=float(k)/${glslFloat(Math.max(2, Math.round(STAR_SMEAR_SAMPLES)) - 1)}-.5;
-   float beta=-dirn*(T*omega+f*smear);
-   acc+=starAt(rotAxis(dir,fw,beta),soft);
+  for(int k=0;k<8;k++){
+   float ff=float(k)/7.-.5;
+   acc+=sky(rotAxis(d,fw,-dirn*(T*om+ff*sm)),env/r1);
   }
-  acc=acc/${glslFloat(Math.max(2, Math.round(STAR_SMEAR_SAMPLES)))}*(1.+${glslFloat(STAR_TRAIL_BRIGHTNESS)}*smear*8.);
-  acc=mix(starAt(dir,0.),acc,${glslFloat(DISTORTION_OPACITY)}); // blend plain stars with the swirling ones
-  vec3 add=acc*${glslVec3(STAR_COLOR)}*${glslFloat(STAR_BRIGHTNESS)};
-  float th=atan(uv.y,uv.x);
-  float hz=0.;
+  acc=acc/8.*(1.+sm*10.);
+  acc=mix(sky(d,0.),acc,${gf(WRAP_OPACITY)});
+  col+=tr*sc*acc*1.1;
+  float th=atan(uv.y,uv.x),hz=0.;
   for(int ph=0;ph<2;ph++){
-   float phi=fract(T/${glslFloat(HAZE_CYCLE_SECONDS)}+float(ph)*.5);
-   float w=1.-abs(2.*phi-1.);
-   float a=th+dirn*omega*${glslFloat(HAZE_CYCLE_SECONDS)}*phi;
-   float u=(a/TAU+.5)*${glslFloat(Math.round(HAZE_PATCH_COUNT))};
-   hz+=w*(.6*vnp(vec2(u,rho*${glslFloat(HAZE_RADIAL_FREQUENCY)}),${glslFloat(Math.round(HAZE_PATCH_COUNT))})+.4*vnp(vec2(u*2.,rho*${glslFloat(HAZE_RADIAL_FREQUENCY * 2.3)}+7.),${glslFloat(2 * Math.round(HAZE_PATCH_COUNT))}));
+   float phi=fract(T/10.+float(ph)*.5),w=1.-abs(2.*phi-1.);
+   float u=((th+dirn*om*10.*phi)/TAU+.5)*9.;
+   hz+=w*(.6*vnp(vec2(u,rho*1.1),9.)+.4*vnp(vec2(u*2.,rho*2.5+7.),18.));
   }
-  float henv=smoothstep(1.,1.3,rho)*(1.-smoothstep(halo*.3,halo,rho))/pow(r1,.6);
-  add+=${glslVec3(HAZE_COLOR)}*${glslFloat(HAZE_STRENGTH * DISTORTION_OPACITY)}*smoothstep(.25,.95,hz)*henv;
-  add+=${glslVec3(RIM_GLOW_COLOR)}*${glslFloat(RIM_GLOW_STRENGTH * DISTORTION_OPACITY)}*exp(-max(rho-1.,0.)/${glslFloat(RIM_GLOW_WIDTH)})*step(1.,rho);
-  col+=tr*add;
- }
+  float henv=smoothstep(1.,1.3,rho)*(1.-smoothstep(${gf(WRAP_RADIUS)}*.3,${gf(WRAP_RADIUS)},rho))/pow(r1,.6);
+  col+=tr*vec3(1.,.38,.12)*.22*${gf(WRAP_OPACITY)}*${gb(WRAP_HAZE)}*smoothstep(.25,.95,hz)*henv;
 `
-  : `
- if(esc){
-  col+=tr*${glslVec3(STAR_COLOR)}*${glslFloat(STAR_BRIGHTNESS)}*starAt(normalize(vel),0.);
- }
-`;
+  : `col+=tr*sc*sky(d,0.)*1.1;`;
 
-const VERTEX_SHADER = `
-  attribute vec2 a;
-  void main() { gl_Position = vec4(a, 0., 1.); }
-`;
+const GAS_GLSL = RING_STREAKS
+  ? `for(int j=0;j<5;j++){float o=(float(j)-2.)*${gf(STREAK_LENGTH)}*.25;
+  n+=.5*vnp(vec2(u+o,rr*9.),CL)+.5*vnp(vec2(u*.7+o,rr*26.+3.),CL*.7);}
+ n=n/5.;n=.25+1.5*n*n;`
+  : `n=.5*vnp(vec2(u,rr*5.),CL)+.3*vnp(vec2(u*2.,rr*14.),2.*CL)+.2*vnp(vec2(u*.5,rr*30.),CL*.5);`;
+
+const LOWER_GLSL = !LOWER_RING_FIX
+  ? ''
+  : LOWER_RING_DETAIL
+    ? `if(!upper){float streams=.2+1.4*n*n;float gaps=.35+1.3*vnp(vec2(u*.22,rr*7.+n*2.),CL);float bands=.85+.3*sin(u*.45+rr*10.);I*=${gf(LOWER_RING_BRIGHTNESS)}*streams*gaps*bands;}`
+    : `if(!upper)I*=${gf(LOWER_RING_BRIGHTNESS)};`;
+
+const VERTEX_SHADER = `attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}`;
 
 const FRAGMENT_SHADER = `
 precision highp float;
 uniform vec2 R;
-uniform float T;
-uniform float Z;
+uniform float T,Z,EL,A,TB;
 uniform vec2 HP;
-uniform float A;
-uniform float TB;
 ${PLANET_UNIFORMS_GLSL}
-const float TAU=${glslFloat(6.2831853)};
-const float RIN=${glslFloat(RING_INNER_RADIUS)},ROUT=${glslFloat(DISK_OUTER_RADIUS)};
-const float ROT=${glslFloat(RING_ROTATION_DIRECTION)};
-const float CL=${glslFloat(Math.round(RING_CLUMP_COUNT))};
-const float UPSPIN=${glslFloat(UPPER_RING_ROTATION_SPEED_MULTIPLIER)},LOSPIN=${glslFloat(LOWER_RING_ROTATION_SPEED_MULTIPLIER)};
-const float UPTHIN=${glslFloat(UPPER_RING_THINNING)},LOTHIN=${glslFloat(LOWER_RING_THINNING)};
+const float TAU=6.2831853,RIN=${gf(RING_INNER_RADIUS)},ROUT=${gf(DISK_OUTER_RADIUS)},CL=70.;
 float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 float vnp(vec2 p,float per){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
  float a=mod(i.x,per),b=mod(i.x+1.,per);
  return mix(mix(h21(vec2(a,i.y)),h21(vec2(b,i.y)),f.x),mix(h21(vec2(a,i.y+1.)),h21(vec2(b,i.y+1.)),f.x),f.y);}
 vec3 rotAxis(vec3 v,vec3 k,float b){float c=cos(b),s=sin(b);return v*c+cross(k,v)*s+k*dot(k,v)*(1.-c);}
-float starAt(vec3 d,float soft){
- vec3 q=d*${glslFloat(STAR_GRID)};vec3 id=floor(q);
- float s=h21(id.xy+id.z*7.3);
- if(s<1.-${glslFloat(STAR_DENSITY)})return 0.;
- float b=clamp((s-(1.-${glslFloat(STAR_DENSITY)}))/${glslFloat(STAR_DENSITY)},0.,1.);
- vec3 j=(vec3(h21(id.yz),h21(id.zx),h21(id.xy))-.5)*.2;
+float st(vec3 d,float grid,float dens,float soft){
+ vec3 q=d*grid,id=floor(q);float s=h21(id.xy+id.z*7.3);
+ if(s<1.-dens)return 0.;
+ float bb=(s-(1.-dens))/dens;
+ vec3 j=(vec3(h21(id.yz),h21(id.zx),h21(id.xy))-.5)*.3;
  float dist=length(q-(id+.5+j));
- float rad=.28+.14*clamp(soft,0.,1.);
- return (1.-smoothstep(0.,rad,dist))*(.4+.6*b)/(1.+1.5*soft);
-}
+ return (1.-smoothstep(0.,.3+.14*clamp(soft,0.,1.),dist))*(.25+.75*bb*bb)/(1.+1.5*soft);}
+float sky(vec3 d,float soft){return ${gb(STARS)}*(st(d,90.,.05,soft)+.6*st(d*1.7+3.,160.,.06,soft));}
 vec3 ramp(float k){
- vec3 c=mix(${glslVec3(DISK_COLOR_COOL)},${glslVec3(DISK_COLOR_WARM)},smoothstep(0.,.5,k));
- c=mix(c,${glslVec3(DISK_COLOR_GOLD)},smoothstep(.45,.85,k));
- return mix(c,${glslVec3(DISK_COLOR_WHITE_HOT)},smoothstep(.85,1.,k));}
+ vec3 c=mix(vec3(.4,.05,0.),vec3(1.,.4,.05),smoothstep(0.,.5,k));
+ c=mix(c,vec3(1.,.8,.45),smoothstep(.4,.85,k));
+ return mix(c,vec3(1.,.96,.88),smoothstep(.85,1.,k));}
+float gas(float u,float rr){
+ float n=0.;
+ ${GAS_GLSL}
+ return n;}
 void main(){
  vec2 uv=(gl_FragCoord.xy-R*HP)/(R.x*Z);
  float ca=cos(A),sa=sin(A);
  uv=mat2(ca,-sa,sa,ca)*uv;
- float el=${glslFloat(CAMERA_TILT_RADIANS)};
- vec3 ro=${glslFloat(CAMERA_DISTANCE)}*vec3(0.,sin(el),-cos(el));
+ vec3 ro=${gf(CAMERA_DISTANCE)}*vec3(0.,sin(EL),-cos(EL));
  vec3 fw=-normalize(ro),rt=normalize(cross(vec3(0,1,0),fw)),up=cross(fw,rt);
- vec3 vel=normalize(fw+(uv.x*rt+uv.y*up)*1.0),pos=ro;
- float h2=dot(cross(pos,vel),cross(pos,vel));vec3 v0=vel;
+ vec3 vel=normalize(fw+uv.x*rt+uv.y*up),pos=ro,v0=vel;
+ float h2=dot(cross(pos,vel),cross(pos,vel));
+ float rho=length(uv)/${gf(SSR)};
  vec3 col=vec3(0.);float tr=1.,nc=0.;bool esc=true;
  for(int i=0;i<${RAY_MARCH_STEPS};i++){
   float r2=dot(pos,pos),r=sqrt(r2);
   if(r<1.){esc=false;break;}
   if(tr<.02)break;
-  if(r>${glslFloat(CAMERA_DISTANCE + 15)}&&dot(pos,vel)>0.)break;
+  if(r>${gf(CAMERA_DISTANCE + 15)}&&dot(pos,vel)>0.)break;
   float dt=clamp(.05*r,.015,.45);
   vec3 nv=normalize(vel-1.5*h2*pos/(r2*r2*r)*dt);
   vec3 np=pos+nv*dt;
   if(pos.y*np.y<0.){
    vec3 p=mix(pos,np,pos.y/(pos.y-np.y));
    float rr=length(p.xz);
-   bool upperRing=pos.y>0.; // upper band versus the lensed underside
-   float ringOuter=upperRing?ROUT:${glslFloat(LOWER_DISK_OUTER_RADIUS)};
-   if(rr>RIN&&rr<ringOuter){
-    float k=pow(RIN/rr,.55);
-    float spin=upperRing?UPSPIN:LOSPIN;
-    float u=(atan(p.z,p.x)/TAU+.5)*CL+T*2.5/pow(rr,1.5)*ROT*${glslFloat(RING_ROTATION_SPEED)}*spin*CL/24.;
-    float n=.6*vnp(vec2(u,rr*6.),CL)+.4*vnp(vec2(u*2.,rr*15.),2.*CL);
-    vec3 vd=normalize(vec3(-p.z,0.,p.x))*sqrt(.5/rr)*ROT;
-    float D=clamp(1./(1.-dot(vd,-nv)),.35,2.6);
+   if(rr>RIN&&rr<ROUT){
+    bool upper=pos.y>0.;
+    float k=pow(RIN/rr,.5);
+    float u=(atan(p.z,p.x)/TAU+.5)*CL+T*${gf(RING_ROTATION_SPEED)}/pow(rr,1.5)*CL/24.;
+    float n=gas(u,rr);
+    vec3 vd=normalize(vec3(-p.z,0.,p.x))*sqrt(.5/rr);
+    float D=clamp(1./(1.-dot(vd,-nv)),.6,1.9);
     float bf=smoothstep(.15,.6,1.-dot(nv,v0));
-    float I=pow(RIN/rr,${glslFloat(DISK_BRIGHTNESS_FALLOFF)}+3.5*bf*(upperRing?UPTHIN:LOTHIN))*(${glslFloat(RING_CLUMP_BASE_BRIGHTNESS)}+${glslFloat(RING_CLUMP_CONTRAST)}*n)*pow(D,2.2);
-    float outerFade=upperRing?${glslFloat(DISK_OUTER_FADE_WIDTH)}:${glslFloat(LOWER_DISK_OUTER_FADE_WIDTH)};
-    float ed=smoothstep(RIN,RIN+.25,rr)*(1.-smoothstep(ringOuter-outerFade,ringOuter,rr));
-    I*=ed*(1.-.6*nc);
-    float ringHeat=clamp(k*D*1.05,0.,1.);
-    if(!upperRing) ringHeat=min(ringHeat,.9); // warm cream on the lensed underside, hottest white stays on the upper band
-    float lowerArc=1.0-.42*smoothstep(.65,1.55,max(-uv.y,0.)/${glslFloat(SHADOW_SCREEN_RADIUS)});
-    float sideBrightness=upperRing?1.0:${glslFloat(LOWER_RING_BRIGHTNESS)}*lowerArc;
-    col+=tr*ramp(ringHeat)*I*${glslFloat(DISK_BRIGHTNESS)}*sideBrightness;
-    tr*=1.-.97*ed;nc=1.;
+    float thin=upper?${gf(UPPER_RING_THINNING)}:${LOWER_RING_FIX ? gf(LOWER_RING_THINNING) : '.9'};
+    float I=pow(RIN/rr,1.1+3.*bf*thin)*(.3+.9*n)*pow(D,2.);
+    ${LOWER_GLSL}
+    float ed=smoothstep(RIN,RIN+.3,rr)*(1.-smoothstep(ROUT-7.,ROUT,rr));
+    I*=ed*(1.-.5*nc);
+    col+=tr*ramp(clamp(k*D*1.05,0.,1.))*I*${gf(DISK_BRIGHTNESS)};
+    nc=1.;
    }
   }
   pos=np;vel=nv;
  }
- ${ESCAPED_RAY_GLSL}
- col=1.-exp(-col*${glslFloat(DISK_EXPOSURE)});
- vec3 outc=col+${glslVec3(SPACE_TINT_COLOR)}*tr*(1.0-TB);
+ if(esc){
+  vec3 d=normalize(vel);
+  vec3 sc=mix(vec3(.75,.82,1.),vec3(1.,.9,.75),h21(floor(d.xy*90.)));
+  ${ESCAPED_GLSL}
+ }else{
+  float g=${gf(SHADOW_GLOW_STRENGTH)}*${gb(SHADOW_GLOW)};
+  float topBias=.55+.45*clamp(uv.y/${gf(SSR)},-1.,1.);
+  col+=tr*g*(vec3(.05,.08,.11)*pow(rho,2.)*topBias+vec3(.5,.28,.16)*pow(rho,7.)*.12);
+ }
+ if(rho>=1.){
+  float g=(exp(-(rho-1.)/.018)*.9+exp(-(rho-1.)/.14)*.18)*${gb(PHOTON_RING)};
+  col+=vec3(1.,.82,.58)*g*tr;
+ }
+ col=1.-exp(-col*${gf(DISK_EXPOSURE)});
+ col*=1.-.35*dot(uv*.9,uv*.9)*(1.-TB);
+ vec3 outc=col+(h21(gl_FragCoord.xy+T)-.5)/120.*(1.-TB);
 ${PLANET_GLSL}
  float alpha=mix(1.0,esc?1.0-exp(-max(max(outc.r,outc.g),outc.b)*3.0):1.0,TB);
  gl_FragColor=vec4(outc*alpha,alpha);
 }
 `;
 
-// One <canvas id="bh" className={className}> — same shape as the canvas version, so any CSS you wrote
-// for that one (#bh, .your-class, width / height / position) works here unchanged.
-export default function BlackholeV2({
+export default function BlackholeGargantua({
   className = '',
-  id = 'bh-v2',
+  id = 'bh',
   style,
-  positionX = BLACK_HOLE_POSITION_X_FRACTION,
+  positionX,
   positionY,
-  rotation = 0,
+  rotation = 1,
+  tilt = CAMERA_TILT_RADIANS,
   transparentBackground = false,
 } = {}) {
   const canvasRef = useRef(null);
-  const positionXRef = useRef(positionX);
-  const positionYRef = useRef(positionY);
-  const rotationRef = useRef(rotation);
-  const transparentBackgroundRef = useRef(transparentBackground);
-  positionXRef.current = positionX;
-  positionYRef.current = positionY;
-  rotationRef.current = rotation;
-  transparentBackgroundRef.current = transparentBackground;
+  const propsRef = useRef({});
+  propsRef.current = { positionX, positionY, rotation, tilt, transparentBackground };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
 
     let gl = null;
-    try {
-      gl = canvas.getContext('webgl');
-    } catch (err) {
-      gl = null;
-    }
-    if (!gl) {
-      console.error('BlackholeImproved: WebGL not supported');
-      return undefined;
-    }
+    try { gl = canvas.getContext('webgl'); } catch (err) { gl = null; }
+    if (!gl) { console.error('BlackholeGargantua: WebGL not supported'); return undefined; }
 
-    // ---- compile shaders ---------------------------------------------------
     const compile = (type, source) => {
       const shader = gl.createShader(type);
       gl.shaderSource(shader, source);
       gl.compileShader(shader);
       if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error('BlackholeImproved shader error:', gl.getShaderInfoLog(shader));
+        console.error('BlackholeGargantua shader error:', gl.getShaderInfoLog(shader));
         return null;
       }
       return shader;
     };
-    const vertexShader = compile(gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fragmentShader = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    if (!vertexShader || !fragmentShader) return undefined;
+    const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER);
+    const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    if (!vs || !fs) return undefined;
 
     const program = gl.createProgram();
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      console.error('BlackholeImproved link error:', gl.getProgramInfoLog(program));
+      console.error('BlackholeGargantua link error:', gl.getProgramInfoLog(program));
       return undefined;
     }
     gl.useProgram(program);
 
-    const vertexBuffer = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    const positionLocation = gl.getAttribLocation(program, 'a');
-    gl.enableVertexAttribArray(positionLocation);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+    const loc = gl.getAttribLocation(program, 'a');
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
-    const uResolution = gl.getUniformLocation(program, 'R');
-    const uTime = gl.getUniformLocation(program, 'T');
-    const uZoom = gl.getUniformLocation(program, 'Z');
-    const uHolePosition = gl.getUniformLocation(program, 'HP');
-    const uRotation = gl.getUniformLocation(program, 'A');
-    const uTransparentBackground = gl.getUniformLocation(program, 'TB');
-    const uPlanets = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'PL') : null;
-    const uLitColors = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'PA') : null;
-    const uShadowColors = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'PB') : null;
-    const uHoleCentre = PLANET_COUNT > 0 ? gl.getUniformLocation(program, 'HC') : null;
-    const uOrbits = PLANET_COUNT > 0 && ORBIT_LINE_VISIBLE ? gl.getUniformLocation(program, 'PO') : null;
-    const uLineColor = PLANET_COUNT > 0 && ORBIT_LINE_VISIBLE ? gl.getUniformLocation(program, 'LC') : null;
-    const uLineWidth = PLANET_COUNT > 0 && ORBIT_LINE_VISIBLE ? gl.getUniformLocation(program, 'LW') : null;
+    const U = (n) => gl.getUniformLocation(program, n);
+    const uR = U('R'), uT = U('T'), uZ = U('Z'), uEL = U('EL'), uHP = U('HP'), uA = U('A'), uTB = U('TB');
+    const uPL = PLANET_COUNT > 0 ? U('PL') : null;
+    const uPA = PLANET_COUNT > 0 ? U('PA') : null;
+    const uPB = PLANET_COUNT > 0 ? U('PB') : null;
+    const uHC = PLANET_COUNT > 0 ? U('HC') : null;
+    const uPO = PLANET_COUNT > 0 && ORBIT_LINE_VISIBLE ? U('PO') : null;
+    const uLC = PLANET_COUNT > 0 && ORBIT_LINE_VISIBLE ? U('LC') : null;
+    const uLW = PLANET_COUNT > 0 && ORBIT_LINE_VISIBLE ? U('LW') : null;
 
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion:reduce)').matches;
 
-    // any css colour -> [r, g, b, a] in 0..1
-    const colorContext = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    const colorCtx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
     const parseColor = (css) => {
-      colorContext.clearRect(0, 0, 1, 1);
-      colorContext.fillStyle = '#000000';
-      colorContext.fillStyle = css;
-      colorContext.fillRect(0, 0, 1, 1);
-      const d = colorContext.getImageData(0, 0, 1, 1).data;
+      colorCtx.clearRect(0, 0, 1, 1);
+      colorCtx.fillStyle = '#000000';
+      colorCtx.fillStyle = css;
+      colorCtx.fillRect(0, 0, 1, 1);
+      const d = colorCtx.getImageData(0, 0, 1, 1).data;
       return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255];
     };
 
-    // ---- planets state -----------------------------------------------------
-    const planets = PLANETS.map((planet) => ({
-      ...planet,
-      angle: planet.startAngleRadians == null ? Math.random() * TAU : planet.startAngleRadians,
-    }));
-    const planetData = new Float32Array(Math.max(PLANET_COUNT, 1) * 4);
-    const litData = new Float32Array(Math.max(PLANET_COUNT, 1) * 3);
-    const shadowData = new Float32Array(Math.max(PLANET_COUNT, 1) * 3);
-    const orbitData = new Float32Array(Math.max(PLANET_COUNT, 1) * 2);
+    const planets = PLANETS.map((p) => ({ ...p, angle: p.startAngleRadians == null ? Math.random() * TAU : p.startAngleRadians }));
+    const n = Math.max(PLANET_COUNT, 1);
+    const planetData = new Float32Array(n * 4);
+    const litData = new Float32Array(n * 3);
+    const shadowData = new Float32Array(n * 3);
+    const orbitData = new Float32Array(n * 2);
 
-    let canvasWidth = 1;
-    let canvasHeight = 1;
-    let pixelRatio = 1;
-    let holeFractionX = BLACK_HOLE_POSITION_X_FRACTION;
-    let holeFractionY = BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION;
-    let holeX = 0;
-    let holeY = 0;
-    let shadowRadiusPx = 1; // black hole radius in css px
-    let zoomValue = 1;
-    let orbitLineRgba = [1, 1, 1, 0.1];
+    let W = 1, H = 1, pr = 1, fx = 0.5, fy = 0.5, holeX = 0, holeY = 0, shadowPx = 1, zoom = 1;
+    let lineRgba = [1, 1, 1, 0.1];
     let planetColors = [];
 
-    // read CSS custom properties (fall back to the constants at the top)
-    const readCssTheme = () => {
+    const readTheme = () => {
       const css = getComputedStyle(canvas);
-      const read = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
-      orbitLineRgba = parseColor(read('--blackhole-orbit-line-color', ORBIT_LINE_COLOR));
-      planetColors = PLANETS.map((planet, i) => ({
-        lit: parseColor(read(`--blackhole-planet-${i + 1}-lit-color`, planet.litColor)).slice(0, 3),
-        shadow: parseColor(read(`--blackhole-planet-${i + 1}-shadow-color`, planet.shadowColor)).slice(0, 3),
+      const read = (name, fb) => css.getPropertyValue(name).trim() || fb;
+      lineRgba = parseColor(read('--blackhole-orbit-line-color', ORBIT_LINE_COLOR));
+      planetColors = PLANETS.map((p, i) => ({
+        lit: parseColor(read(`--blackhole-planet-${i + 1}-lit-color`, p.litColor)).slice(0, 3),
+        shadow: parseColor(read(`--blackhole-planet-${i + 1}-shadow-color`, p.shadowColor)).slice(0, 3),
       }));
     };
 
-    // size everything from the canvas' own CSS size (like the canvas version's init())
+    const place = () => {
+      const { positionX: px, positionY: py } = propsRef.current;
+      const tx = typeof px === 'function'
+        ? px(W)
+        : px ?? (window.innerWidth <= NARROW_VIEWPORT_MAX_WIDTH_PX
+          ? BLACK_HOLE_POSITION_X_FRACTION_NARROW
+          : BLACK_HOLE_POSITION_X_FRACTION);
+      fx = Math.max(0.1, Math.min(0.995, tx));
+      fy = py ?? (W < NARROW_CANVAS_MAX_WIDTH_PX
+        ? BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW
+        : BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION);
+      holeX = W * fx;
+      holeY = H * (1 - fy);
+    };
+
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
-      pixelRatio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
-      canvasWidth = Math.max(1, rect.width);
-      canvasHeight = Math.max(1, rect.height);
-      const w = Math.max(1, Math.round(canvasWidth * pixelRatio));
-      const h = Math.max(1, Math.round(canvasHeight * pixelRatio));
+      pr = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO);
+      W = Math.max(1, rect.width);
+      H = Math.max(1, rect.height);
+      const w = Math.max(1, Math.round(W * pr));
+      const h = Math.max(1, Math.round(H * pr));
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
       gl.viewport(0, 0, w, h);
-      const targetPositionX = typeof positionXRef.current === 'function' ? positionXRef.current(canvasWidth) : positionXRef.current;
-      holeFractionX = Math.max(0.1, Math.min(0.995, targetPositionX));
-      holeFractionY = positionYRef.current ?? (
-        canvasWidth < NARROW_CANVAS_MAX_WIDTH_PX
-          ? BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW
-          : BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION
-      );
-      holeX = canvasWidth * holeFractionX;
-      holeY = canvasHeight * (1 - holeFractionY);
-      // one rule for everything: black hole radius in css px = BLACK_HOLE_RADIUS x min(width x 0.8, height)
-      const sizeBasis = Math.min(canvasWidth * BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION, canvasHeight);
-      shadowRadiusPx = BLACK_HOLE_RADIUS * sizeBasis;
-      zoomValue = shadowRadiusPx / (canvasWidth * SHADOW_SCREEN_RADIUS);
-      readCssTheme();
+      place();
+      shadowPx = BLACK_HOLE_RADIUS * Math.min(W * BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION, H);
+      zoom = shadowPx / (W * SSR);
+      readTheme();
     };
     resize();
 
-    // react to CSS size changes too, but ignore the resize our own width/height attributes cause
     const onBoxResize = () => {
       const rect = canvas.getBoundingClientRect();
-      if (Math.abs(rect.width - canvasWidth) < 0.5 && Math.abs(rect.height - canvasHeight) < 0.5) return;
-      if (pixelRatio !== 1 && Math.abs(rect.width - canvas.width) < 0.5 && Math.abs(rect.height - canvas.height) < 0.5) return;
+      if (Math.abs(rect.width - W) < 0.5 && Math.abs(rect.height - H) < 0.5) return;
+      if (pr !== 1 && Math.abs(rect.width - canvas.width) < 0.5 && Math.abs(rect.height - canvas.height) < 0.5) return;
       resize();
     };
     let resizeObserver = null;
@@ -494,113 +393,81 @@ export default function BlackholeV2({
     }
     window.addEventListener('resize', resize);
 
-    // ---- planets: update positions and fill the uniform arrays -------------------
-    const updatePlanets = (deltaSeconds) => {
+    const updatePlanets = (dt) => {
       if (PLANET_COUNT === 0) return;
-      const direction = PLANET_ORBIT_CLOCKWISE ? 1 : -1; // screen y points down, so +angle = clockwise
-
+      const dir = PLANET_ORBIT_CLOCKWISE ? 1 : -1;
       const items = planets.map((planet, i) => {
-        const flattening = planet.flatteningRatio == null ? ORBIT_FLATTENING_RATIO : planet.flatteningRatio;
-        const orbitHalfWidth = planet.orbitWidthFraction * PLANET_ORBIT_MAX_WIDTH_FRACTION * canvasWidth;
-        // Keplerian-style: inner orbits move faster
-        const angularSpeed =
-          (PLANET_ORBIT_SPEED * planet.speedMultiplier) /
-          Math.pow(planet.orbitWidthFraction / PLANET_ORBIT_SPEED_REFERENCE_FRACTION, 1.5);
-        planet.angle += direction * angularSpeed * deltaSeconds;
-        const sine = Math.sin(planet.angle);
-        return {
-          index: i,
-          planet,
-          colors: planetColors[i],
-          flattening,
-          orbitHalfWidth,
-          x: holeX + Math.cos(planet.angle) * orbitHalfWidth,
-          y: holeY + sine * orbitHalfWidth * flattening,
-          nearness: sine, // -1 far side (top), +1 near side (bottom)
-        };
+        const flat = planet.flatteningRatio == null ? ORBIT_FLATTENING_RATIO : planet.flatteningRatio;
+        const half = planet.orbitWidthFraction * PLANET_ORBIT_MAX_WIDTH_FRACTION * W;
+        const speed = (PLANET_ORBIT_SPEED * planet.speedMultiplier) / Math.pow(planet.orbitWidthFraction / PLANET_ORBIT_SPEED_REFERENCE_FRACTION, 1.5);
+        planet.angle += dir * speed * dt;
+        const s = Math.sin(planet.angle);
+        return { i, planet, colors: planetColors[i], flat, half, x: holeX + Math.cos(planet.angle) * half, y: holeY + s * half * flat, near: s };
       });
-
-      items.slice().sort((a, b) => a.nearness - b.nearness).forEach((item, k) => { // far side first
-        const radius = Math.max(1, item.planet.radiusInShadowRadii * shadowRadiusPx * (1 + NEAR_SIDE_SIZE_BOOST * item.nearness));
-        planetData[k * 4] = item.x * pixelRatio;
-        planetData[k * 4 + 1] = (canvasHeight - item.y) * pixelRatio;
-        planetData[k * 4 + 2] = radius * pixelRatio;
+      items.slice().sort((a, b) => a.near - b.near).forEach((it, k) => {
+        const radius = Math.max(1, it.planet.radiusInShadowRadii * shadowPx * (1 + NEAR_SIDE_SIZE_BOOST * it.near));
+        planetData[k * 4] = it.x * pr;
+        planetData[k * 4 + 1] = (H - it.y) * pr;
+        planetData[k * 4 + 2] = radius * pr;
         planetData[k * 4 + 3] = 0;
-        litData.set(item.colors.lit, k * 3);
-        shadowData.set(item.colors.shadow, k * 3);
+        litData.set(it.colors.lit, k * 3);
+        shadowData.set(it.colors.shadow, k * 3);
       });
-      items.forEach((item) => {
-        orbitData[item.index * 2] = Math.max(1, item.orbitHalfWidth * pixelRatio);
-        orbitData[item.index * 2 + 1] = Math.max(1, item.orbitHalfWidth * item.flattening * pixelRatio);
+      items.forEach((it) => {
+        orbitData[it.i * 2] = Math.max(1, it.half * pr);
+        orbitData[it.i * 2 + 1] = Math.max(1, it.half * it.flat * pr);
       });
     };
 
-    // ---- animation loop ----------------------------------------------------
-    let animationFrameId = 0;
-    let isVisible = true;
-    let elapsedSeconds = 0; // running clock for the shader
-    let lastTimestamp = 0;
-
-    const frame = (timestamp) => {
-      animationFrameId = requestAnimationFrame(frame);
-      if (!lastTimestamp) lastTimestamp = timestamp;
-      const delta = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
-      lastTimestamp = timestamp;
-      if (!isVisible) return;
-
-      const step = delta * (prefersReducedMotion ? 0.1 : 1);
-      elapsedSeconds += step;
-      const targetPositionX = typeof positionXRef.current === 'function' ? positionXRef.current(canvasWidth) : positionXRef.current;
-      holeFractionX = Math.max(0.1, Math.min(0.995, targetPositionX));
-      holeFractionY = positionYRef.current ?? (
-        canvasWidth < NARROW_CANVAS_MAX_WIDTH_PX
-          ? BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW
-          : BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION
-      );
-      holeX = canvasWidth * holeFractionX;
-      holeY = canvasHeight * (1 - holeFractionY);
+    let raf = 0, visible = true, elapsed = 0, last = 0;
+    const frame = (ts) => {
+      raf = requestAnimationFrame(frame);
+      if (!last) last = ts;
+      const delta = Math.min((ts - last) / 1000, 0.05);
+      last = ts;
+      if (!visible) return;
+      const step = delta * (reduceMotion ? 0.1 : 1);
+      elapsed += step;
+      place();
       updatePlanets(step);
-
-      gl.uniform2f(uResolution, canvas.width, canvas.height);
-      gl.uniform1f(uTime, elapsedSeconds);
-      gl.uniform1f(uZoom, zoomValue);
-      gl.uniform2f(uHolePosition, holeFractionX, holeFractionY);
-      gl.uniform1f(uRotation, (rotationRef.current * Math.PI) / 180);
-      gl.uniform1f(uTransparentBackground, transparentBackgroundRef.current ? 1 : 0);
+      const p = propsRef.current;
+      gl.uniform2f(uR, canvas.width, canvas.height);
+      gl.uniform1f(uT, elapsed);
+      gl.uniform1f(uZ, zoom);
+      gl.uniform1f(uEL, p.tilt);
+      gl.uniform2f(uHP, fx, fy);
+      gl.uniform1f(uA, (p.rotation * Math.PI) / 180);
+      gl.uniform1f(uTB, p.transparentBackground ? 1 : 0);
       if (PLANET_COUNT > 0) {
-        gl.uniform4fv(uPlanets, planetData);
-        gl.uniform3fv(uLitColors, litData);
-        gl.uniform3fv(uShadowColors, shadowData);
-        gl.uniform2f(uHoleCentre, holeX * pixelRatio, (canvasHeight - holeY) * pixelRatio);
+        gl.uniform4fv(uPL, planetData);
+        gl.uniform3fv(uPA, litData);
+        gl.uniform3fv(uPB, shadowData);
+        gl.uniform2f(uHC, holeX * pr, (H - holeY) * pr);
         if (ORBIT_LINE_VISIBLE) {
-          gl.uniform2fv(uOrbits, orbitData);
-          gl.uniform4f(uLineColor, orbitLineRgba[0], orbitLineRgba[1], orbitLineRgba[2], orbitLineRgba[3]);
-          gl.uniform1f(uLineWidth, ORBIT_LINE_WIDTH_PX * pixelRatio);
+          gl.uniform2fv(uPO, orbitData);
+          gl.uniform4f(uLC, lineRgba[0], lineRgba[1], lineRgba[2], lineRgba[3]);
+          gl.uniform1f(uLW, ORBIT_LINE_WIDTH_PX * pr);
         }
       }
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
-    animationFrameId = requestAnimationFrame(frame);
+    raf = requestAnimationFrame(frame);
 
-    let intersectionObserver = null;
+    let io = null;
     try {
-      intersectionObserver = new IntersectionObserver((entries) => {
-        isVisible = entries[0].isIntersecting;
-      });
-      intersectionObserver.observe(canvas);
-    } catch (err) {
-      isVisible = true;
-    }
+      io = new IntersectionObserver((entries) => { visible = entries[0].isIntersecting; });
+      io.observe(canvas);
+    } catch (err) { visible = true; }
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
-      if (intersectionObserver) intersectionObserver.disconnect();
+      cancelAnimationFrame(raf);
+      if (io) io.disconnect();
       if (resizeObserver) resizeObserver.disconnect();
       window.removeEventListener('resize', resize);
       gl.deleteProgram(program);
-      gl.deleteShader(vertexShader);
-      gl.deleteShader(fragmentShader);
-      gl.deleteBuffer(vertexBuffer);
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      gl.deleteBuffer(buffer);
     };
   }, []);
 

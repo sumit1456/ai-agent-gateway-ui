@@ -5,17 +5,19 @@ import Landing from './pages/Landing';
 import Login    from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
+import HowItWorks from './pages/HowItWorks';
+import Features from './pages/Features';
 import Nav from './components/Nav';
 import { useAuthUser } from './hooks/useAuth';
 
-function parseHash() {
-  const raw = window.location.hash.replace(/^#/, '');
-  if (raw.startsWith('/')) return { route: raw, anchor: '' };
-  return { route: '/', anchor: raw };
+function parseLocation() {
+  const route = window.location.pathname || '/';
+  const anchor = window.location.hash.replace(/^#/, '');
+  return { route, anchor: anchor.startsWith('/') ? '' : anchor };
 }
 
 function App() {
-  const [route, setRoute] = useState(() => parseHash().route);
+  const [route, setRoute] = useState(() => parseLocation().route);
   const { data: user, isLoading: authLoading } = useAuthUser();
   const queryClient = useQueryClient();
   const loggedIn = !!user;
@@ -23,15 +25,15 @@ function App() {
   // Redirect authenticated users away from auth pages
   useEffect(() => {
     if (loggedIn && (route === '/login' || route === '/register')) {
-      window.location.hash = '#/';
+      window.location.assign('/');
     }
   }, [loggedIn, route]);
 
   useEffect(() => {
     document.documentElement.classList.add('js');
 
-    const onHashChange = () => {
-      const { route: next, anchor } = parseHash();
+    const onLocationChange = () => {
+      const { route: next, anchor } = parseLocation();
       setRoute(next);
       if (anchor) {
         window.setTimeout(() => {
@@ -43,8 +45,12 @@ function App() {
       }
     };
 
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    window.addEventListener('popstate', onLocationChange);
+    window.addEventListener('hashchange', onLocationChange);
+    return () => {
+      window.removeEventListener('popstate', onLocationChange);
+      window.removeEventListener('hashchange', onLocationChange);
+    };
   }, []);
 
   const handleLogout = async () => {
@@ -54,7 +60,7 @@ function App() {
     await queryClient.invalidateQueries();
     queryClient.clear();
     // Redirect to home
-    window.location.hash = '#/';
+    window.location.assign('/');
   };
 
   // Show loading state while checking auth
@@ -69,6 +75,10 @@ function App() {
 
       {route.startsWith('/dashboard') ? (
         <Dashboard loggedIn={loggedIn} user={user} onLogout={handleLogout} />
+      ) : route.startsWith('/how-it-works') ? (
+        <HowItWorks />
+      ) : route.startsWith('/features') ? (
+        <Features />
       ) : route.startsWith('/register') ? (
         <Register loggedIn={loggedIn} user={user} />
       ) : route.startsWith('/login') ? (

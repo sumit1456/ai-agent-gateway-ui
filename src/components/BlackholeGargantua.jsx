@@ -8,17 +8,16 @@ import React, { useEffect, useRef } from 'react';
    ========================================================================== */
 
 // ---- Feature toggles (true / false) ------------------------------------------
-const SPACE_WRAP_EFFECT = false;   // swirling, smeared stars around the hole (false = plain lensed stars)
+const SPACE_WRAP_EFFECT = true;   // colorless lensed starlight + faint veil that swirls around the hole
 const SHADOW_GLOW = true;         // faint lensed glow inside the shadow (false = pure black)
 const RING_STREAKS = true;        // gas smeared along its rotation (false = clumpy dots)
 const LOWER_RING_FIX = true;      // dim, thin lower image so it doesn't look like a donut
 const LOWER_RING_DETAIL = true;   // show the lower disk as rotating gas streams instead of a smooth band
 const PHOTON_RING = true;         // thin bright line hugging the shadow
-const STARS = false;               // background star field
-const WRAP_HAZE = false;          // keep the effect tight; no broad haze layer
+const STARS = false;              // global star field across the whole canvas (the wrap stars are separate)
 
 // ---- Render quality ------------------------------------------------------------
-const RENDER_MODE = 'low';     // 'high' | 'medium' | 'low' | 'auto'
+const RENDER_MODE = 'medium';     // 'high' | 'medium' | 'low' | 'auto'
 const RENDER_QUALITY = {
   high: { pixelRatio: 1.25, rayMarchSteps: 170 },
   medium: { pixelRatio: 1.0, rayMarchSteps: 150 },
@@ -36,18 +35,20 @@ const MAX_PIXEL_RATIO = ACTIVE_QUALITY.pixelRatio;
 const RAY_MARCH_STEPS = ACTIVE_QUALITY.rayMarchSteps; // keep >= 140 to preserve the lensing silhouette
 
 // ---- Size & position -----------------------------------------------------------
-const BLACK_HOLE_RADIUS = 0.24;   // ★ SIZE: shadow radius = this x min(0.8 x canvas width, canvas height)
+const BLACK_HOLE_RADIUS = 0.22;   // ★ SIZE: shadow radius = this x min(0.8 x canvas width, canvas height)
 const BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION = 0.8;
 const BLACK_HOLE_SHADOW_RADIUS = 4.06; // calibration (measured). Leave as is.
-const BLACK_HOLE_POSITION_X_FRACTION = 0.5;
-const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION = 0.5;
+const BLACK_HOLE_POSITION_X_FRACTION = 0.7;
+const BLACK_HOLE_POSITION_X_FRACTION_NARROW = 0.62;
+const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION = 0.55;
 const BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW = 0.6;
 const NARROW_CANVAS_MAX_WIDTH_PX = 700;
+const NARROW_VIEWPORT_MAX_WIDTH_PX = 820;
 const CAMERA_TILT_RADIANS = 0.13; // 0 = edge-on
 const CAMERA_DISTANCE = 30;
 
 // ---- Rings ----------------------------------------------------------------------
-const RING_INNER_RADIUS = 2.6;
+const RING_INNER_RADIUS = 2.1;
 const DISK_OUTER_RADIUS = 12.0;
 const RING_ROTATION_SPEED = 15.5;  // matched to BlackholeImproved's visible ring speed; 0 = frozen
 const STREAK_LENGTH = 1.5;        // retain streaks while keeping their movement visible
@@ -57,12 +58,14 @@ const UPPER_RING_THINNING = 0.2; // lower = thicker upper arch
 const LOWER_RING_BRIGHTNESS = 1; // match the upper disk's overall brightness
 const LOWER_RING_THINNING = UPPER_RING_THINNING; // keep the lower ring's color profile; brightness is controlled separately
 const SHADOW_GLOW_STRENGTH = 0.5;
+const DOPPLER_TINT = 0.5;         // 0 = one flat gold; 1 = approaching side whiter/cooler, receding side deeper amber
 
-// ---- Space wrap ------------------------------------------------------------------
-const WRAP_OPACITY = 0.58;        // barely visible lensing around the shadow
-const WRAP_SPEED = 0.7;          // swirl speed at the hole edge, rad/s
-const WRAP_RADIUS = 2;          // keep the wrap close to the black hole
+// ---- Space wrap (colorless: only white starlight + faint grey veil, bent by the real lensing) ----
+const WRAP_OPACITY = 1;          // overall strength of the wrap (0 = off)
+const WRAP_SPEED = 0.35;         // swirl speed near the hole edge, rad/s (outer rings turn slower)
+const WRAP_RADIUS = 3;           // how far from the shadow the wrap fades out (in shadow radii)
 const WRAP_CLOCKWISE = true;
+const WRAP_DUST = 0.35;          // faint translucent veil that gets stretched into arcs (0 = stars only)
 
 // ---- Planets (drawn by the shader, off by default) ---------------------------------
 const PLANETS_ENABLED = false;
@@ -120,31 +123,46 @@ ${ORBIT_LINE_VISIBLE ? ` for(int i=0;i<${PLANET_COUNT};i++){
 `
   : '';
 
+/* Space wrap
+   Starlight is placed on the sky in polar rings around the view axis (the axis through the hole).
+   The ray-marched direction of each pixel is looked up in that field, so the gravitational bending
+   itself produces the Einstein-ring arcs, the squeezed halo at the shadow edge and the mirrored
+   images. Each ring turns at its own speed, so nothing winds up over time. Everything is white or
+   grey: no tint at all. It is faded out with distance so it stays "transparent" over your page. */
+const WRAP_FUNCS_GLSL = `
+float hash12(vec2 p){vec3 p3=fract(vec3(p.xyx)*.1031);p3+=dot(p3,p3.yzx+33.33);return fract((p3.x+p3.y)*p3.z);}
+float pst(float eps,float phi,float dE,float dens,float seed,float sp){
+ float k=eps/dE,kr=floor(k);
+ float rr=(kr+.5)*dE;
+ float n=max(1.,floor(TAU*sin(rr)/dE));
+ float om=.15+.85*clamp(rr/1.6,0.,1.);
+ float u=fract(phi/TAU+.5-fract(sp*om/TAU))*n;
+ float ci=floor(u);
+ vec2 id=vec2(kr,ci)+seed;
+ float s=hash12(id);
+ if(s<1.-dens)return 0.;
+ float bb=(s-(1.-dens))/dens;
+ vec2 j=(vec2(hash12(id+17.3),hash12(id+41.7))-.5)*.4;
+ float dd=length(vec2(u-ci-.5-j.x,k-kr-.5-j.y));
+ return (1.-smoothstep(.05,.3,dd))*(.18+.82*bb*bb*bb);}
+float dustv(float eps,float phi,float sp){
+ float x=(phi/TAU+.5-fract(sp*.12/TAU))*10.,y=eps*7.;
+ float n=.6*vnp(vec2(x,y),10.)+.4*vnp(vec2(x*2.,y*2.7+5.),20.);
+ return smoothstep(.45,.9,n);}
+`;
+
 const ESCAPED_GLSL = SPACE_WRAP_EFFECT
   ? `
-  float r1=max(rho,1.);
-  float env=1.-smoothstep(${gf(WRAP_RADIUS)}*.4,${gf(WRAP_RADIUS)},rho);
-  float fall=pow(1./r1,1.5);
-  float om=${gf(WRAP_SPEED)}*fall*env, sm=.6*fall*env;
-  float dirn=${WRAP_CLOCKWISE ? '1.' : '-1.'};
-  float acc=0.;
-  for(int k=0;k<8;k++){
-   float ff=float(k)/7.-.5;
-   acc+=sky(rotAxis(d,fw,-dirn*(T*om+ff*sm)),env/r1);
-  }
-  acc=acc/8.*(1.+sm*10.);
-  acc=mix(sky(d,0.),acc,${gf(WRAP_OPACITY)});
-  col+=tr*sc*acc*1.1;
-  float th=atan(uv.y,uv.x),hz=0.;
-  for(int ph=0;ph<2;ph++){
-   float phi=fract(T/10.+float(ph)*.5),w=1.-abs(2.*phi-1.);
-   float u=((th+dirn*om*10.*phi)/TAU+.5)*9.;
-   hz+=w*(.6*vnp(vec2(u,rho*1.1),9.)+.4*vnp(vec2(u*2.,rho*2.5+7.),18.));
-  }
-  float henv=smoothstep(1.,1.3,rho)*(1.-smoothstep(${gf(WRAP_RADIUS)}*.3,${gf(WRAP_RADIUS)},rho))/pow(r1,.6);
-  col+=tr*vec3(1.,.38,.12)*.22*${gf(WRAP_OPACITY)}*${gb(WRAP_HAZE)}*smoothstep(.25,.95,hz)*henv;
+  col+=tr*sky(d,0.);
+  vec2 e=vec2(dot(d,rt),dot(d,up));
+  float eps=atan(length(e),dot(d,fw)),phi=atan(e.y,e.x);
+  float wenv=1.-smoothstep(1.,${gf(WRAP_RADIUS * 1.5)},rho);wenv*=wenv;
+  float sp=${WRAP_CLOCKWISE ? '1.' : '-1.'}*T*${gf(WRAP_SPEED)};
+  float w=.9*pst(eps,phi,.0042,.02,0.,sp)+1.4*pst(eps,phi,.0085,.006,31.,sp)+.35*pst(eps,phi,.0021,.05,77.,sp);
+  w+=${gf(WRAP_DUST)}*.14*dustv(eps,phi,sp);
+  col+=tr*vec3(1.)*w*wenv*${gf(WRAP_OPACITY)};
 `
-  : `col+=tr*sc*sky(d,0.)*1.1;`;
+  : `col+=tr*sky(d,0.)*1.1;`;
 
 const GAS_GLSL = RING_STREAKS
   ? `for(int j=0;j<5;j++){float o=(float(j)-2.)*${gf(STREAK_LENGTH)}*.25;
@@ -171,7 +189,7 @@ float h21(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(
 float vnp(vec2 p,float per){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
  float a=mod(i.x,per),b=mod(i.x+1.,per);
  return mix(mix(h21(vec2(a,i.y)),h21(vec2(b,i.y)),f.x),mix(h21(vec2(a,i.y+1.)),h21(vec2(b,i.y+1.)),f.x),f.y);}
-vec3 rotAxis(vec3 v,vec3 k,float b){float c=cos(b),s=sin(b);return v*c+cross(k,v)*s+k*dot(k,v)*(1.-c);}
+${WRAP_FUNCS_GLSL}
 float st(vec3 d,float grid,float dens,float soft){
  vec3 q=d*grid,id=floor(q);float s=h21(id.xy+id.z*7.3);
  if(s<1.-dens)return 0.;
@@ -180,10 +198,12 @@ float st(vec3 d,float grid,float dens,float soft){
  float dist=length(q-(id+.5+j));
  return (1.-smoothstep(0.,.3+.14*clamp(soft,0.,1.),dist))*(.25+.75*bb*bb)/(1.+1.5*soft);}
 float sky(vec3 d,float soft){return ${gb(STARS)}*(st(d,90.,.05,soft)+.6*st(d*1.7+3.,160.,.06,soft));}
+// disk palette: umber -> amber -> gold -> warm white (less saturated orange than before)
 vec3 ramp(float k){
- vec3 c=mix(vec3(.4,.05,0.),vec3(1.,.4,.05),smoothstep(0.,.5,k));
- c=mix(c,vec3(1.,.8,.45),smoothstep(.4,.85,k));
- return mix(c,vec3(1.,.96,.88),smoothstep(.85,1.,k));}
+ vec3 c=mix(vec3(.12,.045,.015),vec3(.62,.32,.12),smoothstep(0.,.35,k));
+ c=mix(c,vec3(1.,.72,.38),smoothstep(.3,.65,k));
+ c=mix(c,vec3(1.,.91,.74),smoothstep(.6,.88,k));
+ return mix(c,vec3(1.,.97,.93),smoothstep(.85,1.,k));}
 float gas(float u,float rr){
  float n=0.;
  ${GAS_GLSL}
@@ -222,7 +242,9 @@ void main(){
     ${LOWER_GLSL}
     float ed=smoothstep(RIN,RIN+.3,rr)*(1.-smoothstep(ROUT-7.,ROUT,rr));
     I*=ed*(1.-.5*nc);
-    col+=tr*ramp(clamp(k*D*1.05,0.,1.))*I*${gf(DISK_BRIGHTNESS)};
+    vec3 tint=mix(vec3(1.),vec3(.88,.95,1.1),${gf(DOPPLER_TINT)}*smoothstep(1.15,1.9,D));
+    tint=mix(tint,vec3(1.06,.9,.74),${gf(DOPPLER_TINT)}*(1.-smoothstep(.6,.95,D)));
+    col+=tr*ramp(clamp(k*D*1.05,0.,1.))*tint*I*${gf(DISK_BRIGHTNESS)};
     nc=1.;
    }
   }
@@ -230,23 +252,23 @@ void main(){
  }
  if(esc){
   vec3 d=normalize(vel);
-  vec3 sc=mix(vec3(.75,.82,1.),vec3(1.,.9,.75),h21(floor(d.xy*90.)));
   ${ESCAPED_GLSL}
  }else{
   float g=${gf(SHADOW_GLOW_STRENGTH)}*${gb(SHADOW_GLOW)};
   float topBias=.55+.45*clamp(uv.y/${gf(SSR)},-1.,1.);
-  col+=tr*g*(vec3(.05,.08,.11)*pow(rho,2.)*topBias+vec3(.5,.28,.16)*pow(rho,7.)*.12);
+  col+=tr*g*(vec3(.06,.05,.045)*pow(rho,2.)*topBias+vec3(.5,.3,.18)*pow(rho,7.)*.12);
  }
  if(rho>=1.){
   float g=(exp(-(rho-1.)/.018)*.9+exp(-(rho-1.)/.14)*.18)*${gb(PHOTON_RING)};
-  col+=vec3(1.,.82,.58)*g*tr;
+  col+=vec3(1.,.9,.74)*g*tr;
  }
  col=1.-exp(-col*${gf(DISK_EXPOSURE)});
  col*=1.-.35*dot(uv*.9,uv*.9)*(1.-TB);
  vec3 outc=col+(h21(gl_FragCoord.xy+T)-.5)/120.*(1.-TB);
 ${PLANET_GLSL}
- float alpha=mix(1.0,esc?1.0-exp(-max(max(outc.r,outc.g),outc.b)*3.0):1.0,TB);
- gl_FragColor=vec4(outc*alpha,alpha);
+ float lum=max(max(outc.r,outc.g),outc.b);
+ float alpha=mix(1.0,esc?clamp(lum,0.,1.):1.0,TB);
+ gl_FragColor=vec4(outc,alpha);
 }
 `;
 
@@ -254,9 +276,9 @@ export default function BlackholeGargantua({
   className = '',
   id = 'bh',
   style,
-  positionX = BLACK_HOLE_POSITION_X_FRACTION,
+  positionX,
   positionY,
-  rotation = 5,
+  rotation = 1,
   tilt = CAMERA_TILT_RADIANS,
   transparentBackground = false,
 } = {}) {
@@ -348,7 +370,11 @@ export default function BlackholeGargantua({
 
     const place = () => {
       const { positionX: px, positionY: py } = propsRef.current;
-      const tx = typeof px === 'function' ? px(W) : px;
+      const tx = typeof px === 'function'
+        ? px(W)
+        : px ?? (window.innerWidth <= NARROW_VIEWPORT_MAX_WIDTH_PX
+          ? BLACK_HOLE_POSITION_X_FRACTION_NARROW
+          : BLACK_HOLE_POSITION_X_FRACTION);
       fx = Math.max(0.1, Math.min(0.995, tx));
       fy = py ?? (W < NARROW_CANVAS_MAX_WIDTH_PX
         ? BLACK_HOLE_POSITION_Y_FROM_BOTTOM_FRACTION_NARROW

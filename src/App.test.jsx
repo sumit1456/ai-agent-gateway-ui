@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import App from './App';
 
 test('renders the Horizon landing page', () => {
+  window.history.replaceState({}, '', '/');
   window.location.hash = '';
   render(<App />);
   const logo = screen.getAllByText('Horizon');
@@ -11,7 +12,7 @@ test('renders the Horizon landing page', () => {
 });
 
 test('renders the login form with a log in button', () => {
-  window.location.hash = '#/login';
+  window.history.replaceState({}, '', '/login');
   render(<App />);
   expect(screen.getByText('Welcome back')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Log in' })).toBeInTheDocument();
@@ -19,7 +20,7 @@ test('renders the login form with a log in button', () => {
 });
 
 test('renders the register form with a switch to log in', () => {
-  window.location.hash = '#/register';
+  window.history.replaceState({}, '', '/register');
   render(<App />);
   expect(screen.getByText('Register your agent')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();

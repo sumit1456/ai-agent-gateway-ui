@@ -692,7 +692,7 @@ function ProvidersTab() {
         <div className="empty-icon">🔑</div>
         <h3>Log in to configure providers</h3>
         <p>Providers are tied to your account. Log in to add API keys and pick models.</p>
-        <a className="btn p" href="#/login">Log in</a>
+        <a className="btn p" href="/login">Log in</a>
       </div>
     );
   }
@@ -2516,7 +2516,7 @@ function ApiKeysTab() {
         <div className="empty-icon">🔑</div>
         <h3>Log in to manage API keys</h3>
         <p>API keys are used to authenticate your requests to the gateway.</p>
-        <a className="btn p" href="#/login">Log in</a>
+        <a className="btn p" href="/login">Log in</a>
       </div>
     );
   }
@@ -2663,7 +2663,7 @@ function ApiKeysTab() {
 
 export default function Dashboard({ loggedIn, user, onLogout }) {
   // Check URL for tab parameter
-  const urlParams = new URLSearchParams(window.location.hash.split('?')[1]);
+  const urlParams = new URLSearchParams(window.location.search);
   const initialTab = urlParams.get('tab') || 'agents';
   
   const [activeTab, setActiveTab] = useState(initialTab);

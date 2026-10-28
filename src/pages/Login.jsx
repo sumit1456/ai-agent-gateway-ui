@@ -27,7 +27,7 @@ export default function Login() {
       setEmail('');
       setPassword('');
       setTimeout(() => {
-        window.location.hash = '#/dashboard';
+        window.location.assign('/dashboard');
       }, 800);
     } catch (err) {
       setMessage({ kind: 'error', text: err.message });
@@ -70,7 +70,7 @@ export default function Login() {
             <div className="field">
               <label htmlFor="login-password">
                 Password
-                <a className="forgot-link" href="#/forgot">Forgot?</a>
+                <a className="forgot-link" href="/forgot">Forgot?</a>
               </label>
               <input
                 id="login-password"
@@ -91,7 +91,7 @@ export default function Login() {
 
           <p className="auth-switch">
             Don&apos;t have an account?{' '}
-            <a href="#/register">Create one</a>
+            <a href="/register">Create one</a>
           </p>
         </div>
       </section>
