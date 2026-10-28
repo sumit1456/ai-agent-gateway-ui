@@ -50,7 +50,7 @@ const CAMERA_DISTANCE = 30;
 // ---- Rings ----------------------------------------------------------------------
 const RING_INNER_RADIUS = 2.1;
 const DISK_OUTER_RADIUS = 12.0;
-const RING_ROTATION_SPEED = 15.5;  // matched to BlackholeImproved's visible ring speed; 0 = frozen
+const RING_ROTATION_SPEED = 25.5;  // matched to BlackholeImproved's visible ring speed; 0 = frozen
 const STREAK_LENGTH = 1.5;        // retain streaks while keeping their movement visible
 const DISK_BRIGHTNESS = 1.6;
 const DISK_EXPOSURE = 1.5;
@@ -62,27 +62,27 @@ const DOPPLER_TINT = 0.5;         // 0 = one flat gold; 1 = approaching side whi
 
 // ---- Space wrap (colorless: only white starlight + faint grey veil, bent by the real lensing) ----
 const WRAP_OPACITY = 1;          // overall strength of the wrap (0 = off)
-const WRAP_SPEED = 0.35;         // swirl speed near the hole edge, rad/s (outer rings turn slower)
+const WRAP_SPEED = 2;         // swirl speed near the hole edge, rad/s (outer rings turn slower)
 const WRAP_RADIUS = 3;           // how far from the shadow the wrap fades out (in shadow radii)
-const WRAP_CLOCKWISE = true;
-const WRAP_DUST = 0.35;          // faint translucent veil that gets stretched into arcs (0 = stars only)
+const WRAP_CLOCKWISE = false;
+const WRAP_DUST = 0.2;          // faint translucent veil that gets stretched into arcs (0 = stars only)
 
 // ---- Planets (drawn by the shader, off by default) ---------------------------------
 const PLANETS_ENABLED = false;
 const PLANET_ORBIT_SPEED = 0.25;
 const PLANET_ORBIT_SPEED_REFERENCE_FRACTION = 0.86;
-const PLANET_ORBIT_MAX_WIDTH_FRACTION = 0.48;
+const PLANET_ORBIT_MAX_SHADOW_RADII = 0.48 / (BLACK_HOLE_RADIUS * BLACK_HOLE_SIZE_BASIS_WIDTH_FRACTION);
 const PLANET_ORBIT_CLOCKWISE = true;
 const ORBIT_FLATTENING_RATIO = 0.18;
-const NEAR_SIDE_SIZE_BOOST = 0.35;
+const NEAR_SIDE_SIZE_BOOST = 0;
 const PLANET_LIGHT_SHIFT = 0.4;
 const ORBIT_LINE_VISIBLE = false;
 const ORBIT_LINE_WIDTH_PX = 1;
 const ORBIT_LINE_COLOR = 'rgba(255,255,255,0.10)';
 const PLANETS = [
-  { name: 'ember', orbitWidthFraction: 0.74, radiusInShadowRadii: 0.02, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#e0b27a', shadowColor: '#5a3a22' },
-  { name: 'ocean', orbitWidthFraction: 0.86, radiusInShadowRadii: 0.03, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#9cc4ee', shadowColor: '#1c3a66' },
-  { name: 'rust', orbitWidthFraction: 0.97, radiusInShadowRadii: 0.023, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#d98a70', shadowColor: '#4a2219' },
+  { name: 'ember', orbitWidthFraction: 0.74, radiusInShadowRadii: 0.01, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#e0b27a', shadowColor: '#5a3a22' },
+  { name: 'ocean', orbitWidthFraction: 0.86, radiusInShadowRadii: 0.02, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#9cc4ee', shadowColor: '#1c3a66' },
+  { name: 'rust', orbitWidthFraction: 0.99, radiusInShadowRadii: 0.023, speedMultiplier: 1, startAngleRadians: null, flatteningRatio: null, litColor: '#d98a70', shadowColor: '#4a2219' },
 ];
 
 /* ========================================================================== */
@@ -418,7 +418,7 @@ export default function BlackholeGargantua({
       const dir = PLANET_ORBIT_CLOCKWISE ? 1 : -1;
       const items = planets.map((planet, i) => {
         const flat = planet.flatteningRatio == null ? ORBIT_FLATTENING_RATIO : planet.flatteningRatio;
-        const half = planet.orbitWidthFraction * PLANET_ORBIT_MAX_WIDTH_FRACTION * W;
+        const half = planet.orbitWidthFraction * PLANET_ORBIT_MAX_SHADOW_RADII * shadowPx;
         const speed = (PLANET_ORBIT_SPEED * planet.speedMultiplier) / Math.pow(planet.orbitWidthFraction / PLANET_ORBIT_SPEED_REFERENCE_FRACTION, 1.5);
         planet.angle += dir * speed * dt;
         const s = Math.sin(planet.angle);

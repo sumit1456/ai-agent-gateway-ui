@@ -175,6 +175,93 @@
   font-size: 15px;
 }
 
+.run-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0 0 20px;
+}
+
+.run-metric-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.run-metric-card > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.run-metric-card > strong {
+  font-size: 25px;
+  color: #fff;
+}
+
+.run-metric-card > small,
+.run-model-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.run-model-metric {
+  gap: 10px;
+}
+
+.run-model-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-top: 7px;
+}
+
+.run-model-row code,
+.run-usage-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #f4c18e;
+}
+
+.run-usage-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.run-usage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.run-usage-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.run-usage-row > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .run-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .tab-notice {
   padding: 12px 16px;
   border-radius: 10px;

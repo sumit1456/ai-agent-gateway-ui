@@ -586,6 +586,16 @@ function RunsTab() {
   // Use React Query hooks for automatic caching and refetching
   const { data: runsData, isLoading, isFetching, error, refetch: refetchRuns } = useRuns(100);
   const runs = runsData?.runs || [];
+  const totalTokens = runs.reduce((sum, run) => sum + (Number(run.tokens_used) || 0), 0);
+  const tokenRecordedRuns = runs.filter((run) => run.tokens_used != null).length;
+  const averageTokens = tokenRecordedRuns ? Math.round(totalTokens / tokenRecordedRuns) : 0;
+  const modelRunCounts = new Map();
+  runs.forEach((run) => {
+    new Set(Object.values(run.models || {}).filter(Boolean)).forEach((model) => {
+      modelRunCounts.set(model, (modelRunCounts.get(model) || 0) + 1);
+    });
+  });
+  const popularModels = [...modelRunCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
   
   // Persist selected run ID across navigation
   const { state, setState } = usePageState('runs', {
@@ -609,8 +619,13 @@ function RunsTab() {
   
   return <>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-      <p className="providers-intro">Inspect workflow steps, inputs and outputs, failures, token usage, and timing for each run.</p>
+      <p className="providers-intro">Track model usage and token consumption across recent runs, then inspect per role usage for each run.</p>
       <button type="button" className="btn g small" onClick={refreshRuns} disabled={isFetching || runFetching}>{isFetching || runFetching ? 'Refreshing…' : 'Refresh runs'}</button>
+    </div>
+    <div className="run-metrics-grid">
+      <article className="run-metric-card"><span>Tokens used</span><strong>{totalTokens.toLocaleString()}</strong><small>Across {tokenRecordedRuns} runs; may include estimates</small></article>
+      <article className="run-metric-card"><span>Average per run</span><strong>{averageTokens.toLocaleString()}</strong><small>Recorded tokens per run</small></article>
+      <article className="run-metric-card run-model-metric"><span>Model mix</span>{popularModels.length ? <div>{popularModels.map(([model, count]) => <div className="run-model-row" key={model}><code>{model}</code><small>{count} {count === 1 ? 'run' : 'runs'}</small></div>)}</div> : <small>Model details will appear as new runs are recorded.</small>}</article>
     </div>
     {runError && <div className="tab-notice error" role="alert">Could not load this run: {runError.message} <button type="button" className="btn g small" onClick={() => refetchRun()}>Retry</button></div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(0, 2fr)', gap: '1rem' }}>
@@ -618,12 +633,18 @@ function RunsTab() {
         {!runs.length && <p>No runs found.</p>}
         {runs.map((run) => <button key={run.id} className="btn g" aria-pressed={state.selectedRunId === run.id} onClick={() => openRun(run.id)} style={{ textAlign: 'left', borderColor: state.selectedRunId === run.id ? 'var(--accent, #6467f2)' : undefined }}>
           <strong>{run.status}</strong><br /><small>{new Date(run.created_at).toLocaleString()} · {run.id.slice(0, 8)}</small>
-          <br /><small>{run.tokens_used ?? '—'} tokens · {run.duration_ms == null ? '—' : `${run.duration_ms} ms`}</small>
+          <br /><small>{run.tokens_used == null ? '—' : run.tokens_used.toLocaleString()} tokens · {run.duration_ms == null ? '—' : `${run.duration_ms} ms`}</small>
+          <br /><small>{[...new Set(Object.values(run.models || {}).filter(Boolean))].join(', ') || 'Model details unavailable'}</small>
         </button>)}
       </div>
       {runLoading ? <div className="empty-state"><h3>Loading run details…</h3></div> : selectedRun ? <section style={{ border: '1px solid var(--border, #ddd)', borderRadius: 8, padding: '1rem', minWidth: 0 }}>
         <h3 style={{ marginTop: 0 }}>Run details</h3>
-        <p><strong>Status:</strong> {selectedRun.status}{runFetching && ' · Updating…'} · <strong>Tokens:</strong> {selectedRun.tokens_used ?? 'not recorded'} · <strong>Duration:</strong> {selectedRun.duration_ms == null ? 'not finished' : `${selectedRun.duration_ms} ms`}</p>
+        <p><strong>Status:</strong> {selectedRun.status}{runFetching && ' · Updating…'} · <strong>Total tokens:</strong> {selectedRun.tokens_used == null ? 'not recorded' : selectedRun.tokens_used.toLocaleString()} · <strong>Duration:</strong> {selectedRun.duration_ms == null ? 'not finished' : `${selectedRun.duration_ms} ms`}</p>
+        <h4>Model usage</h4>
+        {selectedRun.models && Object.keys(selectedRun.models).length ? <div className="run-usage-list">{Object.entries(selectedRun.models).map(([role, model]) => {
+          const usage = selectedRun.model_usage?.by_role?.[role];
+          return <div className="run-usage-row" key={role}><div><strong>{role}</strong><code>{model}</code></div><span>{usage ? `${(usage.in || 0).toLocaleString()} input · ${(usage.out || 0).toLocaleString()} output${usage.estimated ? ' · estimated' : ''}` : 'No token breakdown recorded'}</span></div>;
+        })}</div> : <p>Model details are unavailable for this older run. New runs will include configured models and per role token usage.</p>}
         <p><strong>Request</strong></p><pre style={{ whiteSpace: 'pre-wrap' }}>{selectedRun.input}</pre>
         <h4>Executed workflow steps</h4>
         {(selectedRun.workflow_transitions || []).length > 0 && <ol>{selectedRun.workflow_transitions.map((transition, index) => <li key={`${transition.from}-${index}`}>{transition.from} → {transition.to}{transition.condition ? ` when ${JSON.stringify(transition.condition)}` : ''}</li>)}</ol>}
