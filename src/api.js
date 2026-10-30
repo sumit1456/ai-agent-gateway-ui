@@ -241,12 +241,12 @@ export async function streamRun(runId, onEvent, lastEventId) {
   }
 }
 
-export function runAgent(agentId, input, endUserId, sessionId) {
+export function runAgent(agentId, input, endUserId, sessionId, images = []) {
   const headers = {};
   if (endUserId) headers['X-End-User-ID'] = endUserId;
   if (sessionId) headers['X-Session-ID'] = sessionId;
   return request(`/v1/agents/${encodeURIComponent(agentId)}/run`, {
-    method: 'POST', auth: true, headers, body: { input },
+    method: 'POST', auth: true, headers, body: { input, ...(images.length ? { images } : {}) },
   });
 }
 

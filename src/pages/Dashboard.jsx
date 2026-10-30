@@ -1728,6 +1728,7 @@ function IntegrationTab() {
   const [endUserId, setEndUserId] = useState('demo-user-123');
   const [sessionId, setSessionId] = useState('demo-conversation-123');
   const [prompt, setPrompt] = useState('What can you help me with?');
+  const [images, setImages] = useState([]);
   const [running, setRunning] = useState(false);
   const [runOutput, setRunOutput] = useState('');
   const [error, setError] = useState('');
@@ -1751,7 +1752,7 @@ function IntegrationTab() {
     if (!selectedId || !prompt.trim()) return;
     setRunning(true); setError(''); setRunOutput('Starting run…');
     try {
-      const started = await runAgent(selectedId, prompt, endUserId.trim(), sessionId.trim());
+      const started = await runAgent(selectedId, prompt, endUserId.trim(), sessionId.trim(), images.map((image) => image.dataUrl));
       const steps = [];
       let terminal = null;
       const showProgress = () => setRunOutput(JSON.stringify({
@@ -1850,6 +1851,21 @@ function IntegrationTab() {
       <label className="field-label">Agent</label><select className="default-select" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} — {agent.id}</option>)}</select>
       <div className="integration-form-grid"><div><label className="field-label">Test end-user ID</label><input className="key-input" value={endUserId} onChange={(event) => setEndUserId(event.target.value)} /></div><div><label className="field-label">Session ID (reuse to continue)</label><input className="key-input" value={sessionId} onChange={(event) => setSessionId(event.target.value)} /></div></div>
       <label className="field-label">Message</label><textarea className="key-input" rows={3} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+      <label className="field-label">Images (up to 4, 5 MB each)</label><input className="key-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={async (event) => {
+        const selected = Array.from(event.target.files || []);
+        if (selected.length > 4) { setError('Choose up to 4 images.'); event.target.value = ''; return; }
+        if (selected.some((file) => file.size > 5 * 1024 * 1024)) { setError('Each image must be 5 MB or smaller.'); event.target.value = ''; return; }
+        try {
+          const loaded = await Promise.all(selected.map((file) => new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve({ name: file.name, dataUrl: reader.result });
+            reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+            reader.readAsDataURL(file);
+          })));
+          setImages(loaded); setError('');
+        } catch (err) { setError(err.message); }
+      }} />
+      {images.length > 0 && <div className="field-hint">Attached: {images.map((image) => image.name).join(', ')} <button type="button" className="btn g small" onClick={() => setImages([])}>Remove</button></div>}
       <button className="btn p" disabled={running || !selectedId || !prompt.trim()} onClick={execute}>{running ? 'Running…' : 'Run agent'}</button>
       {error && <div className="tab-notice error">{error}</div>}
       {runOutput && <pre className="integration-code"><code>{runOutput}</code></pre>}
