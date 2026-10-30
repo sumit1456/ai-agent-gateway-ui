@@ -35,7 +35,7 @@ const FEATURES = [
   {
     number: '06',
     title: 'Integrate through the API',
-    description: 'Generate gateway API keys and call agent run endpoints from your backend. The integration guide includes React, Node.js, and Python examples, with guidance for keeping credentials server-side.',
+    description: 'Generate gateway API keys and call agent run endpoints from your backend. The integration guide covers image request payloads, model message formatting, run streaming, and credential safety.',
     area: 'API keys · Integration guide',
   },
   {

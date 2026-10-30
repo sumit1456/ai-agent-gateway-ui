@@ -1,0 +1,17 @@
+.integration-guide-page { padding-top: 70px; background: var(--bg, #0a0a0f); min-height: 100vh; }
+.integration-guide-hero { padding: clamp(4rem, 8vw, 7rem) 0 3rem; border-bottom: 1px solid var(--line); }
+.integration-guide-hero h1 { max-width: 850px; font-size: clamp(2.5rem, 6vw, 5rem); line-height: 1.02; margin: 1rem 0; }
+.integration-guide-hero .lead { max-width: 740px; }
+.integration-guide-layout { display: grid; grid-template-columns: 220px minmax(0, 820px); justify-content: center; gap: clamp(2rem, 6vw, 6rem); padding-top: 3rem; padding-bottom: 5rem; }
+.integration-guide-toc { position: sticky; top: 100px; align-self: start; display: grid; gap: 1rem; color: var(--muted); font-size: .92rem; }
+.integration-guide-toc strong { color: var(--fg); margin-bottom: .25rem; }
+.integration-guide-toc a:hover, .integration-guide-download a { color: var(--a); }
+.integration-guide-content section { padding: 0 0 3rem; margin: 0 0 3rem; border-bottom: 1px solid var(--line); scroll-margin-top: 100px; }
+.integration-guide-content h2 { font-size: clamp(1.6rem, 3vw, 2.35rem); margin: .6rem 0 1rem; }
+.integration-guide-content p, .integration-guide-content li { color: var(--muted); line-height: 1.75; }
+.integration-guide-content li { margin: .55rem 0; }
+.integration-guide-content code { color: var(--fg); background: rgba(255,255,255,.07); padding: .12rem .35rem; border-radius: 4px; overflow-wrap: anywhere; }
+.integration-guide-code { padding: 1.2rem 1.35rem; margin: 1.2rem 0 1.5rem; overflow: auto; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.035); color: var(--fg); line-height: 1.65; font-size: .9rem; white-space: pre; }
+.integration-guide-code code { background: transparent; padding: 0; }
+.integration-guide-download { padding-bottom: 1rem; }
+@media (max-width: 800px) { .integration-guide-layout { grid-template-columns: 1fr; } .integration-guide-toc { position: static; display: flex; flex-wrap: wrap; gap: .8rem 1.2rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--line); } .integration-guide-toc strong { width: 100%; } }

@@ -69,6 +69,34 @@ String input:
 { "input": "Find the invoice total for invoice inv-42" }
 ```
 
+### Image input
+
+Send images in the top-level `images` array. Each entry must be a complete HTTPS image URL or a base64 data URL; `...` in this example is only a placeholder. The prompt stays in `input`:
+
+```json
+{
+  "input": "What is in this picture?",
+  "images": ["data:image/jpeg;base64,<complete-base64-data>"],
+  "external_session_id": "conversation-123"
+}
+```
+
+The dashboard playground reads selected image files as data URLs. In your own browser app, use `FileReader.readAsDataURL(file)` and send the resulting string to your authenticated application backend. Your backend forwards the image to the gateway with its bearer token; never put that token in browser code. Image URLs can also be sent directly if they are reachable by the model provider.
+
+The gateway turns the request into a multimodal chat message for the configured model. The conceptual LangChain/OpenAI-compatible message content is:
+
+```json
+{
+  "role": "user",
+  "content": [
+    { "type": "text", "text": "What is in this picture?" },
+    { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,<complete-base64-data>" } }
+  ]
+}
+```
+
+Your caller sends the gateway request format above; LangChain and the provider integration serialize the message for the provider API. The selected model must support image input. The gateway currently accepts up to 4 PNG, JPEG, WEBP, or GIF images, up to 5 MB each. Image bytes are not saved in run history or detailed traces. PDF and document extraction are not included in image input.
+
 When your app receives a body such as `{ "message": "...", "documentId": "..." }`, forward the complete body as `input`; do not extract only `message` unless that is intentional. Put the session key in the separate `external_session_id` field as well. The gateway preserves object input for workflow steps and stores a JSON representation in run/history records.
 
 ### Start response

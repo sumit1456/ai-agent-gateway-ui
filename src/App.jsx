@@ -7,6 +7,7 @@ import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
 import HowItWorks from './pages/HowItWorks';
 import Features from './pages/Features';
+import IntegrationGuide from './pages/IntegrationGuide';
 import Nav from './components/Nav';
 import { useAuthUser } from './hooks/useAuth';
 
@@ -79,6 +80,8 @@ function App() {
         <HowItWorks />
       ) : route.startsWith('/features') ? (
         <Features />
+      ) : route.startsWith('/integration-guide') ? (
+        <IntegrationGuide />
       ) : route.startsWith('/register') ? (
         <Register loggedIn={loggedIn} user={user} />
       ) : route.startsWith('/login') ? (

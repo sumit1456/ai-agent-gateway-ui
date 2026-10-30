@@ -10,6 +10,7 @@ export default function Nav({ loggedIn, user, onLogin, onLogout }) {
           <a href="/">Home</a>
           <a href="/how-it-works">How it works</a>
           <a href="/features">Features</a>
+          <a href="/integration-guide">Integration guide</a>
           <a href="/#api">API</a>
           {loggedIn ? (
             <>
